@@ -1,0 +1,111 @@
+.chatbot-page{
+
+    display:flex;
+
+    background:#F8FAFC;
+
+    min-height:100vh;
+
+}
+
+.chatbot-main{
+
+    width:100%;
+
+    margin-left:260px;
+
+}
+
+.chatbot-content{
+
+    padding:30px;
+
+}
+
+.chatbot-header{
+
+    margin-bottom:30px;
+
+}
+
+.chatbot-header h1{
+
+    color:#1E3A8A;
+
+    margin-bottom:10px;
+
+}
+
+.chatbot-header p{
+
+    color:#64748B;
+
+    line-height:1.7;
+
+}
+
+/* Information Cards */
+
+.chatbot-info{
+
+    display:grid;
+
+    grid-template-columns:repeat(auto-fit,minmax(250px,1fr));
+
+    gap:20px;
+
+    margin-bottom:35px;
+
+}
+
+.info-card{
+
+    background:white;
+
+    padding:25px;
+
+    border-radius:15px;
+
+    box-shadow:0 4px 15px rgba(0,0,0,.08);
+
+    transition:.3s;
+
+}
+
+.info-card:hover{
+
+    transform:translateY(-5px);
+
+}
+
+.info-card h3{
+
+    color:#2563EB;
+
+    margin-bottom:12px;
+
+}
+
+.info-card p{
+
+    color:#64748B;
+
+    line-height:1.6;
+
+}
+
+@media(max-width:900px){
+
+    .chatbot-main{
+
+        margin-left:0;
+
+    }
+
+    .chatbot-content{
+
+        padding:20px;
+
+    }
+
+}

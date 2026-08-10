@@ -1,0 +1,11 @@
+.git
+.pytest_cache
+.venv
+.vscode
+__pycache__
+*.pyc
+.claude-dev-helper
+node_modules
+.env
+compose_*.log
+compose_*.txt

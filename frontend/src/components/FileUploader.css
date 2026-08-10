@@ -1,0 +1,147 @@
+.upload-card {
+    width: 100%;
+    max-width: 760px;
+    margin: 30px auto;
+    background: white;
+    border-radius: 15px;
+    padding: 30px;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.upload-card h2,
+.upload-card h3 {
+    margin: 0;
+    color: #1E3A8A;
+    text-align: center;
+}
+
+.upload-card select,
+.drop-zone {
+    padding: 12px;
+    border: 2px dashed #3B82F6;
+    border-radius: 10px;
+    cursor: pointer;
+    background: #EFF6FF;
+}
+
+.drop-zone {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    color: #1D4ED8;
+    font-weight: 600;
+    position: relative;
+}
+
+.drop-zone input {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+}
+
+.drop-zone.drag-active {
+    border-color: #10B981;
+    background: #ECFDF5;
+}
+
+.file-details,
+.result-card,
+.history-panel {
+    background: #F8FAFC;
+    padding: 15px;
+    border-radius: 10px;
+    border: 1px solid #CBD5E1;
+}
+
+.file-details p,
+.result-card p,
+.history-panel p {
+    margin: 6px 0;
+    color: #334155;
+}
+
+.upload-card button {
+    background: #2563EB;
+    color: white;
+    padding: 14px;
+    border: none;
+    border-radius: 10px;
+    font-size: 16px;
+    cursor: pointer;
+    transition: 0.3s;
+}
+
+.upload-card button:hover {
+    background: #1D4ED8;
+}
+
+.upload-card button:disabled {
+    background: gray;
+    cursor: not-allowed;
+}
+
+.message {
+    text-align: center;
+    font-weight: bold;
+    color: green;
+}
+
+.message.error {
+    color: #B91C1C;
+}
+
+.message.warning {
+    color: #B45309;
+}
+
+.progress-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.progress-bar {
+    width: 100%;
+    height: 10px;
+    border-radius: 999px;
+    background: #E5E7EB;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #2563EB, #10B981);
+    transition: width 0.3s ease;
+}
+
+.preview-box {
+    margin-top: 10px;
+    padding: 10px;
+    background: white;
+    border-radius: 8px;
+    border: 1px solid #CBD5E1;
+    max-height: 180px;
+    overflow: auto;
+}
+
+.history-panel ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.history-panel li {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 0;
+    border-bottom: 1px solid #E2E8F0;
+}

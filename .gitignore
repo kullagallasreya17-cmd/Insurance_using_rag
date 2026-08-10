@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# Pytest / temporary runtime files
+pytest-of-user/
+.pytest_cache/
+torchinductor_user/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# ChromaDB / vector storage
+chroma.sqlite3
+vector_db/
+chroma_db/
+
+# Logs
+*.log
+*_logs.txt
+compose_debug.txt
+compose_startup.log
+
+# Node.js
+node_modules/
+dist/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python build files
+build/
+dist/
+*.egg-info/
+
+# Generated temporary files
+*.tmp
+*.tempfolder_structure.txt
+backend/.cache/
+backend/tmp_blank.pdf

@@ -1,0 +1,102 @@
+services:
+  gateway:
+    build: ./services/gateway
+    ports:
+      - "8000:8000"
+    environment:
+      AUTH_SERVICE_URL: http://backend:8000
+      DOCUMENTS_SERVICE_URL: http://documents:8000
+      RAG_SERVICE_URL: http://rag:8000
+      AI_SERVICE_URL: http://ai:8000
+      BACKEND_SERVICE_URL: http://backend:8000
+    depends_on:
+      - auth
+      - backend
+      - documents
+      - rag
+      - ai
+
+  auth:
+    build: ./services/auth
+    ports:
+      - "8001:8000"
+    environment:
+      SECRET_KEY: ec959152ee7a6f61eae00419fe747a57d9d071bb4117a4d139fe0120bc7b5e72
+      ACCESS_TOKEN_EXPIRE_MINUTES: 480
+
+  documents:
+    build: ./services/documents
+    ports:
+      - "8002:8000"
+    volumes:
+      - ./services/documents/storage:/app/storage
+
+  rag:
+    build: ./services/rag
+    ports:
+      - "8003:8000"
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # internal-only Redis for job queue; not exposed to host by default
+    # healthcheck allows worker to wait for Redis readiness
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    env_file:
+      - backend/.env
+    environment:
+      INDEXING_BACKEND: mongo
+      CACHE_BACKEND: mongo
+    depends_on:
+      - redis
+    # Use the backend image entrypoint to run the RQ worker command
+    command: ["rq", "worker", "rag-indexing", "--url", "redis://redis:6379/0"]
+    restart: on-failure
+
+  ai:
+    build: ./services/ai
+    ports:
+      - "8004:8000"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - gateway
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    env_file:
+      - backend/.env
+    environment:
+      INDEXING_BACKEND: mongo
+      CACHE_BACKEND: mongo
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_PREFIX: ${S3_PREFIX:-insurance-documents}
+      WEB_CONCURRENCY: 1
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+    volumes:
+      - backend_documents:/app/documents
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  backend_documents:

@@ -1,0 +1,254 @@
+.claim-page {
+    display: flex;
+    background: #f8fafc;
+    min-height: 100vh;
+}
+
+.claim-main {
+    margin-left: 260px;
+    width: 100%;
+}
+
+.claim-content {
+    padding: 30px;
+}
+
+.claim-content h1 {
+    color: #1e3a8a;
+    margin-bottom: 8px;
+}
+
+.claim-content p {
+    color: #64748b;
+    margin-bottom: 24px;
+}
+
+.analysis-box {
+    display: grid;
+    grid-template-columns: 1.8fr 1fr 1fr 1.2fr;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.field-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.field-label {
+    font-size: 13px;
+    font-weight: 700;
+    color: #1e3a8a;
+}
+
+.analysis-box input,
+.analysis-box select {
+    width: 100%;
+    padding: 14px 16px;
+    border-radius: 10px;
+    border: 1px solid #cbd5e1;
+    font-size: 15px;
+    background: #fff;
+}
+
+.analysis-box input:focus,
+.analysis-box select:focus {
+    outline: 2px solid rgba(37, 99, 235, 0.18);
+    border-color: #2563eb;
+}
+
+.upload-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 14px 16px;
+    border-radius: 10px;
+    background: #eff6ff;
+    color: #1d4ed8;
+    font-weight: 700;
+    cursor: pointer;
+    border: 1px dashed #60a5fa;
+}
+
+.upload-button input {
+    display: none;
+}
+
+.selected-report {
+    font-size: 13px;
+    color: #0f766e;
+    font-weight: 700;
+}
+
+.validation-message {
+    margin: 12px 0 16px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    background: #fef2f2;
+    color: #b91c1c;
+    font-weight: 700;
+}
+
+.analyze-button {
+    background: #2563eb;
+    color: white;
+    border: none;
+    padding: 14px 24px;
+    border-radius: 10px;
+    cursor: pointer;
+    font-size: 16px;
+    font-weight: 700;
+    margin-bottom: 24px;
+}
+
+.analyze-button:hover {
+    background: #1d4ed8;
+}
+
+.analyze-button:disabled {
+    opacity: 0.7;
+    cursor: wait;
+}
+
+.result-card {
+    background: white;
+    padding: 28px;
+    border-radius: 15px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08);
+    margin-bottom: 24px;
+}
+
+.result-card h2 {
+    color: #1e3a8a;
+    margin-bottom: 20px;
+}
+
+.result-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 20px;
+}
+
+.status-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 14px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.status-badge.approved {
+    background: #dcfce7;
+    color: #15803d;
+}
+
+.status-badge.rejected {
+    background: #fee2e2;
+    color: #b91c1c;
+}
+
+.status-badge.needs-review {
+    background: #fef3c7;
+    color: #b45309;
+}
+
+.result-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
+    margin-bottom: 18px;
+}
+
+.result-stat {
+    background: #f8fafc;
+    border-radius: 12px;
+    padding: 14px;
+    border: 1px solid #e2e8f0;
+}
+
+.result-stat span {
+    display: block;
+    color: #64748b;
+    font-size: 12px;
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    font-weight: 700;
+}
+
+.result-stat strong {
+    color: #0f172a;
+    font-size: 15px;
+}
+
+.section {
+    margin-top: 22px;
+}
+
+.section h3 {
+    color: #2563eb;
+    margin-bottom: 10px;
+}
+
+.section p {
+    color: #475569;
+    line-height: 1.7;
+}
+
+.section ul {
+    margin-left: 20px;
+}
+
+.section li {
+    margin-bottom: 10px;
+}
+
+.history-card {
+    margin-top: 24px;
+}
+
+.enterprise-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.enterprise-table th,
+.enterprise-table td {
+    text-align: left;
+    padding: 12px 10px;
+    border-bottom: 1px solid #e2e8f0;
+    color: #334155;
+    vertical-align: top;
+}
+
+.enterprise-table th {
+    background: #eff6ff;
+    color: #1e3a8a;
+    font-size: 13px;
+}
+
+@media (max-width: 900px) {
+    .claim-main {
+        margin-left: 0;
+    }
+
+    .analysis-box {
+        grid-template-columns: 1fr;
+    }
+
+    .result-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+
+@media (max-width: 640px) {
+    .result-grid {
+        grid-template-columns: 1fr;
+    }
+}

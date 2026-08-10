@@ -1,0 +1,62 @@
+services:
+  gateway:
+    build: ./services/gateway
+    ports:
+      - "8000:8000"
+    environment:
+      AUTH_SERVICE_URL: http://backend:8000
+      DOCUMENTS_SERVICE_URL: http://documents:8000
+      RAG_SERVICE_URL: http://rag:8000
+      AI_SERVICE_URL: http://ai:8000
+      BACKEND_SERVICE_URL: http://backend:8000
+    depends_on:
+      - auth
+      - documents
+      - rag
+      - ai
+      - backend
+
+  auth:
+    build: ./services/auth
+    ports:
+      - "8001:8000"
+    environment:
+      JWT_SECRET: insurance-rag-secret
+      JWT_EXPIRE_MINUTES: 480
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    ports:
+      - "8005:8000"
+    env_file:
+      - backend/.env
+    environment:
+      INDEXING_BACKEND: mongo
+      CACHE_BACKEND: mongo
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_PREFIX: ${S3_PREFIX:-insurance-documents}
+    volumes:
+      - backend_documents:/app/documents
+
+  documents:
+    build: ./services/documents
+    ports:
+      - "8002:8000"
+    volumes:
+      - ./services/documents/storage:/app/storage
+
+  rag:
+    build: ./services/rag
+    ports:
+      - "8003:8000"
+
+  ai:
+    build: ./services/ai
+    ports:
+      - "8004:8000"
+
+volumes:
+  backend_documents:

@@ -1,0 +1,85 @@
+.upload-policy-container{
+
+    display:flex;
+
+    background:#F8FAFC;
+
+    min-height:100vh;
+}
+
+.upload-policy-main{
+
+    margin-left:260px;
+
+    width:100%;
+}
+
+.upload-policy-content{
+
+    padding:30px;
+}
+
+.upload-policy-content h1{
+
+    color:#1E3A8A;
+
+    margin-bottom:10px;
+}
+
+.upload-policy-content p{
+
+    color:#64748B;
+
+    margin-bottom:30px;
+}
+
+/* Info Cards */
+
+.info-cards{
+
+    display:grid;
+
+    grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+
+    gap:20px;
+
+    margin-bottom:35px;
+}
+
+.info-card{
+
+    background:white;
+
+    padding:20px;
+
+    border-radius:12px;
+
+    text-align:center;
+
+    box-shadow:0 5px 12px rgba(0,0,0,.08);
+}
+
+.info-card h3{
+
+    color:#2563EB;
+
+    margin-bottom:10px;
+}
+
+.info-card p{
+
+    color:#475569;
+}
+
+@media(max-width:900px){
+
+    .upload-policy-main{
+
+        margin-left:0;
+    }
+
+    .workflow-steps{
+
+        flex-direction:column;
+    }
+}
