@@ -58,3 +58,6 @@ dist/
 *.tempfolder_structure.txt
 backend/.cache/
 backend/tmp_blank.pdf
+.env.example
+backend/.env.example
+frontend/.env.example
