@@ -85,13 +85,27 @@ function FileUploader({ title, endpoint, defaultCategory = "medical_document" })
   const [allowedCategories, setAllowedCategories] = useState([]);
   const [categoryError, setCategoryError] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [indexing, setIndexing] = useState(false);
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState("info");
   const [progressStep, setProgressStep] = useState(0);
-  const [uploadResult, setUploadResult] = useState(null);
+  const [uploadResults, setUploadResults] = useState([]);
   const [history, setHistory] = useState([]);
   const [dragActive, setDragActive] = useState(false);
   const historyDocumentType = ENDPOINT_DOCUMENT_TYPES[endpoint] || "medical_report";
+
+  const allUploadsComplete = uploadResults.length > 0 && uploadResults.every((result) => {
+    const status = String(result.status || "").toLowerCase();
+    return status === "indexed" || status === "failed";
+  });
+
+  const uploadResultsTitle = uploadResults.length === 0
+    ? ""
+    : allUploadsComplete
+    ? "Upload Complete"
+    : "Upload in Progress";
+
+  const showProgress = uploading || indexing;
 
   const loadHistory = useCallback(async () => {
     const response = await api.get(`/upload-history?document_type=${historyDocumentType}`);
@@ -138,14 +152,15 @@ function FileUploader({ title, endpoint, defaultCategory = "medical_document" })
   }, [defaultCategory]);
 
   useEffect(() => {
-    if (!uploading) return undefined;
+    const shouldAnimate = uploading || indexing;
+    if (!shouldAnimate) return undefined;
 
     const timer = window.setInterval(() => {
       setProgressStep((current) => (current + 1) % PROGRESS_STEPS.length);
     }, 700);
 
     return () => window.clearInterval(timer);
-  }, [uploading]);
+  }, [uploading, indexing]);
 
   const handleFileChange = (event) => {
     const files = Array.from(event.target.files || []);
@@ -184,66 +199,114 @@ function FileUploader({ title, endpoint, defaultCategory = "medical_document" })
 
     try {
       setUploading(true);
+      setIndexing(true);
       setProgressStep(0);
       setMessage("");
       setMessageType("info");
-      setUploadResult(null);
+      setUploadResults([]);
 
       if (allowedCategories.length && !allowedCategories.includes(category)) {
         setMessageType("error");
         setMessage("The selected category is not allowed for your role. Please choose a different category.");
+        setUploading(false);
+        setIndexing(false);
         return;
       }
-      setUploadResult(null);
       setMessage("Uploading documents. Indexing will run in the background...");
       setMessageType("info");
 
-      let documentId = null;
-      // send files sequentially to the same endpoint (backend expects a single file per request)
+      let currentResults = [];
+
       for (const file of selectedFiles) {
         const formData = new FormData();
         formData.append("file", file);
         try {
           const response = await api.post(`/${endpoint}?category=${category}&replace_existing=false`, formData);
-          // keep last returned document id for history polling
-          documentId = response.data?.document_id || documentId;
-          // merge response into uploadResult to show last file metadata
-          setUploadResult((current) => ({ ...(current || {}), ...response.data }));
+          const responseData = response.data || {};
+          const result = {
+            document_id: responseData.document_id,
+            filename: responseData.filename || file.name,
+            category,
+            status: responseData.status || "processing",
+            pages: responseData.pages ?? 0,
+            chunks: responseData.chunks ?? 0,
+            word_count: responseData.word_count ?? responseData.words ?? 0,
+            processing_time_seconds: responseData.processing_time_seconds ?? 0,
+          };
+          currentResults.push(result);
+          setUploadResults([...currentResults]);
         } catch (err) {
           console.error("Upload failed for a file", err);
+          currentResults.push({
+            document_id: null,
+            filename: file.name,
+            category,
+            status: "failed",
+            pages: 0,
+            chunks: 0,
+            word_count: 0,
+            processing_time_seconds: 0,
+          });
+          setUploadResults([...currentResults]);
         }
       }
 
-      let indexedDocument = null;
-      for (let attempt = 0; attempt < 30 && documentId; attempt += 1) {
+      const pendingDocumentIds = new Set(
+        currentResults
+          .filter((item) => item.document_id)
+          .map((item) => item.document_id),
+      );
+
+      let attempts = 0;
+      while (pendingDocumentIds.size > 0 && attempts < 30) {
         await new Promise((resolve) => window.setTimeout(resolve, 1500));
         const documents = await loadHistory();
-        indexedDocument = documents.find((item) => item.id === documentId);
 
-        if (indexedDocument) {
-          setUploadResult((current) => ({ ...current, ...indexedDocument }));
-          const status = (indexedDocument.status || "").toLowerCase();
-
-          if (status === "indexed") {
-            setMessage("Document uploaded and indexed successfully.");
-            setMessageType("success");
-            break;
+        currentResults = currentResults.map((item) => {
+          const matched = documents.find((doc) => doc.id === item.document_id);
+          if (!matched) {
+            return item;
           }
 
-          if (status === "failed") {
-            setMessage("Document uploaded, but indexing failed. Check backend logs for the exact error.");
-            setMessageType("error");
-            break;
+          const status = String(matched.status || item.status || "").toLowerCase();
+          if (status === "indexed" || status === "failed") {
+            pendingDocumentIds.delete(item.document_id);
           }
-        }
+
+          return {
+            ...item,
+            ...matched,
+            category: matched.category || item.category,
+          };
+        });
+
+        setUploadResults([...currentResults]);
+        attempts += 1;
       }
 
-      if (documentId && (!indexedDocument || (indexedDocument.status || "").toLowerCase() === "processing")) {
+      const finishedResults = currentResults.filter((item) => {
+        const status = String(item.status || "").toLowerCase();
+        return status === "indexed" || status === "failed";
+      });
+
+      const allFinished = finishedResults.length === currentResults.length;
+      const anyFailed = finishedResults.some((item) => String(item.status || "").toLowerCase() === "failed");
+
+      if (allFinished) {
+        if (anyFailed) {
+          setMessage("One or more files failed to index. Check logs and retry if needed.");
+          setMessageType("error");
+        } else {
+          setMessage("Document uploaded and indexed successfully.");
+          setMessageType("success");
+        }
+      } else {
         setMessage("Document uploaded and still indexing. Refresh the history in a moment.");
         setMessageType("info");
       }
 
-      if (!documentId) {
+      setIndexing(false);
+      if (!currentResults.some((item) => item.document_id)) {
         await loadHistory();
       }
     } catch (error) {
@@ -256,8 +319,12 @@ function FileUploader({ title, endpoint, defaultCategory = "medical_document" })
       }
     } finally {
       setUploading(false);
-      setProgressStep(PROGRESS_STEPS.length - 1);
-      // clear selected files after upload
+      setIndexing(false);
+      if (allUploadsComplete) {
+        setProgressStep(PROGRESS_STEPS.length - 1);
+      } else {
+        setProgressStep(0);
+      }
       setSelectedFiles([]);
     }
   };
@@ -318,7 +385,7 @@ function FileUploader({ title, endpoint, defaultCategory = "medical_document" })
         {uploading ? "Processing..." : "Upload & Index"}
       </button>
 
-      {uploading && (
+      {showProgress && (
         <div className="progress-panel">
           <p>{PROGRESS_STEPS[progressStep]}</p>
           <div className="progress-bar">
@@ -329,21 +396,37 @@ function FileUploader({ title, endpoint, defaultCategory = "medical_document" })
 
       {message && <p className={`message ${messageType}`}>{message}</p>}
 
-      {uploadResult && (
+      {uploadResults.length > 0 && (
         <div className="result-card">
-          <h3>Upload Complete</h3>
-          <p><strong>File:</strong> {uploadResult.filename}</p>
-          <p><strong>Pages:</strong> {uploadResult.pages || 0}</p>
-          <p><strong>Chunks:</strong> {uploadResult.chunks || 0}</p>
-          <p><strong>Words:</strong> {uploadResult.word_count ?? uploadResult.words ?? 0}</p>
-          <p><strong>Processing Time:</strong> {uploadResult.processing_time_seconds || 0}s</p>
-          <p><strong>Status:</strong> {uploadResult.status || "processing"}</p>
-          {uploadResult.preview_text && (
-            <div className="preview-box">
-              <strong>Preview:</strong>
-              <p>{uploadResult.preview_text}</p>
-            </div>
-          )}
+          <h3>{uploadResultsTitle}</h3>
+          <ul>
+            {uploadResults.map((result) => {
+              const status = String(result.status || "processing").toLowerCase();
+              return (
+                <li key={result.document_id || result.filename}>
+                  <div className="result-header">
+                    <span className="document-name">{result.filename}</span>
+                    <span className={`file-status ${status}`}>{status.replace(/_/g, " ")}</span>
+                  </div>
+                  <div className="file-summary">
+                    <span>Category: {formatCategoryLabel(result.category)}</span>
+                    <span>Pages: {result.pages || 0}</span>
+                    <span>Chunks: {result.chunks || 0}</span>
+                    <span>Words: {result.word_count ?? result.words ?? 0}</span>
+                    {result.processing_time_seconds > 0 && (
+                      <span>Time: {result.processing_time_seconds.toFixed(2)}s</span>
+                    )}
+                  </div>
+                  {status === "processing" && (
+                    <p className="status-note">Indexing in progress. This may take a moment.</p>
+                  )}
+                  {status === "failed" && (
+                    <p className="status-note error">Indexing failed. Please check the server logs or retry.</p>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
         </div>
       )}
 
@@ -354,8 +437,8 @@ function FileUploader({ title, endpoint, defaultCategory = "medical_document" })
             {historyRows.map((item) => (
               <li key={item.id}>
                 <span>{item.filename}</span>
-                <span>{item.category}</span>
-                <span>{item.status}</span>
+                <span>{formatCategoryLabel(item.category)}</span>
+                <span>{String(item.status || "processing").replace(/_/g, " ")}</span>
               </li>
             ))}
           </ul>

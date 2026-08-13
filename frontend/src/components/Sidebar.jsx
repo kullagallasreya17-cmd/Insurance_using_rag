@@ -1,23 +1,25 @@
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { clearSession } from "../auth";
+import { clearSession, getUser } from "../auth";
 import "./Sidebar.css";
 
 function Sidebar() {
   const location = useLocation();
   const navigate = useNavigate();
+  const user = getUser() || {};
+  const role = (user.role || "agent").toLowerCase();
 
   const menuItems = [
-    { name: "Dashboard", path: "/dashboard", icon: "DB" },
-    { name: "Upload Policy", path: "/upload-policy", icon: "UP" },
-    { name: "Documents", path: "/documents", icon: "DC" },
-    { name: "Policies", path: "/policies", icon: "PL" },
-    { name: "AI Chatbot", path: "/chatbot", icon: "AI" },
-    { name: "Claim Analysis & Claims", path: "/claim-analysis", icon: "CA" },
-    { name: "Analytics", path: "/analytics", icon: "AN" },
-    { name: "Notifications", path: "/notifications", icon: "NT" },
-    { name: "Profile", path: "/profile", icon: "PR" },
-    { name: "Settings", path: "/settings", icon: "ST" },
-    { name: "Admin", path: "/admin", icon: "AD" },
+    { name: "Dashboard", path: "/dashboard", icon: "DB", roles: ["admin", "analyst", "agent", "auditor"] },
+    { name: "Upload Policy", path: "/upload-policy", icon: "UP", roles: ["admin", "agent"] },
+    { name: "Documents", path: "/documents", icon: "DC", roles: ["admin", "analyst", "agent", "auditor"] },
+    { name: "Policies", path: "/policies", icon: "PL", roles: ["admin", "analyst", "agent", "auditor"] },
+    { name: "AI Chatbot", path: "/chatbot", icon: "AI", roles: ["admin", "analyst", "agent", "auditor"] },
+    { name: "Claim Analysis & Claims", path: "/claim-analysis", icon: "CA", roles: ["admin", "analyst", "agent", "auditor"] },
+    { name: "Analytics", path: "/analytics", icon: "AN", roles: ["admin", "analyst", "auditor"] },
+    { name: "Notifications", path: "/notifications", icon: "NT", roles: ["admin", "analyst", "agent", "auditor"] },
+    { name: "Profile", path: "/profile", icon: "PR", roles: ["admin", "analyst", "agent", "auditor"] },
+    { name: "Settings", path: "/settings", icon: "ST", roles: ["admin", "analyst", "agent", "auditor"] },
+    { name: "Admin", path: "/admin", icon: "AD", roles: ["admin"] },
   ];
 
   const logout = () => {
@@ -32,14 +34,16 @@ function Sidebar() {
       </div>
 
       <ul className="menu">
-        {menuItems.map((item) => (
-          <li key={item.name} className={location.pathname === item.path ? "active" : ""}>
-            <Link to={item.path}>
-              <span>{item.icon}</span>
-              {item.name}
-            </Link>
-          </li>
-        ))}
+        {menuItems
+          .filter((item) => item.roles.includes(role))
+          .map((item) => (
+            <li key={item.name} className={location.pathname === item.path ? "active" : ""}>
+              <Link to={item.path}>
+                <span>{item.icon}</span>
+                {item.name}
+              </Link>
+            </li>
+          ))}
       </ul>
 
       <div className="logout">

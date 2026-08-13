@@ -114,9 +114,9 @@
 .enterprise-table td {
   border-bottom: 1px solid #e8eef6;
   color: #334155;
-  padding: 14px;
+  padding: 10px 12px;
   text-align: left;
-  vertical-align: top;
+  vertical-align: middle;
 }
 
 .enterprise-table th {

@@ -2,6 +2,7 @@ import logging
 import os
 import time
 import traceback
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -18,6 +19,7 @@ from claim_engine import analyze_claim
 from database import get_database, get_db, init_db, get_next_id, hash_password, verify_password
 from rag.background_indexer import BackgroundIndexer
 from rag.mongo_indexer import MongoJobIndexer
+from rag.rq_indexer import RQJobIndexer
 from rag.indexer import extract_document_preview, index_document
 from rag.retriever import retrieve_documents
 from schemas import ChatRequest, ClaimRequest, LoginRequest, RegisterRequest
@@ -30,6 +32,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DOCUMENTS_DIR = BASE_DIR / "documents"
 MAX_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024
 INDEXING_BACKEND = os.getenv("INDEXING_BACKEND", "local").lower()
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 LOCAL_INDEXER_WORKERS = int(os.getenv("LOCAL_INDEXER_WORKERS", "2"))
 INDEXER_LEASE_SECONDS = int(os.getenv("INDEXER_LEASE_SECONDS", "300"))
 ALLOW_LOCAL_INDEXING_FALLBACK = os.getenv("ALLOW_LOCAL_INDEXING_FALLBACK", "true").lower() == "true"
@@ -100,10 +103,21 @@ ROLE_PERMISSIONS = {
 # FastAPI App
 # -------------------------------------------------
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    background_indexer.start()
+    try:
+        yield
+    finally:
+        background_indexer.stop()
+
+
 app = FastAPI(
     title="Insurance RAG API",
     description="Insurance RAG + Agentic AI using FastAPI and LangChain",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 # -------------------------------------------------
@@ -202,23 +216,14 @@ if INDEXING_BACKEND == "mongo":
         worker_count=LOCAL_INDEXER_WORKERS,
         lease_seconds=INDEXER_LEASE_SECONDS,
     )
+elif INDEXING_BACKEND == "rq":
+    background_indexer = RQJobIndexer(redis_url=REDIS_URL)
 else:
     background_indexer = BackgroundIndexer(handler=process_indexing_job, worker_count=LOCAL_INDEXER_WORKERS)
 
 
 def enqueue_indexing_job(payload: dict) -> str:
     return background_indexer.enqueue(payload)
-
-
-@app.on_event("startup")
-def startup_event():
-    init_db()
-    background_indexer.start()
-
-
-@app.on_event("shutdown")
-def shutdown_event():
-    background_indexer.stop()
 
 
 def get_accessible_categories(role: str | None):
@@ -309,7 +314,7 @@ def register(request: RegisterRequest, db = Depends(get_db)):
         "id": user_id,
         "username": request.username,
         "full_name": request.full_name,
-        "role": request.role,
+        "role": "agent",
         "hashed_password": hash_password(request.password),
         "created_at": datetime.utcnow(),
     }
@@ -1149,12 +1154,20 @@ def upload_document(
         }
 
     except ValueError as e:
+        logging.error("Upload validation error for %s: %s", original_name, e, exc_info=True)
         if saved_storage:
-            storage.delete(saved_storage)
+            try:
+                storage.delete(saved_storage)
+            except Exception:
+                logging.exception("Failed to cleanup saved storage after ValueError for %s", original_name)
 
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        logging.exception("Unhandled exception during file upload for %s", original_name)
         if saved_storage:
-            storage.delete(saved_storage)
+            try:
+                storage.delete(saved_storage)
+            except Exception:
+                logging.exception("Failed to cleanup saved storage after exception for %s", original_name)
 
         raise HTTPException(status_code=500, detail=str(e))

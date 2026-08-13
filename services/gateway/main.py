@@ -1,3 +1,4 @@
+import logging
 import os
 from urllib.parse import urlparse
 
@@ -24,11 +25,8 @@ RAG_URL = os.getenv("RAG_SERVICE_URL", "http://rag:8000")
 AI_URL = os.getenv("AI_SERVICE_URL", "http://ai:8000")
 
 LOCAL_SERVICE_FALLBACKS = {
-    "backend": "http://127.0.0.1:8005",
-    "auth": "http://127.0.0.1:8001",
-    "documents": "http://127.0.0.1:8002",
-    "rag": "http://127.0.0.1:8003",
-    "ai": "http://127.0.0.1:8004",
+    "localhost": "http://127.0.0.1:8000",
+    "127.0.0.1": "http://127.0.0.1:8000",
 }
 
 
@@ -44,15 +42,20 @@ def upstream_candidates(base_url: str) -> list[str]:
 async def proxy_json(method: str, base_url: str, path: str, **kwargs):
     clean_kwargs = {key: value for key, value in kwargs.items() if value is not None}
     upstream_errors: list[str] = []
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
         for candidate in upstream_candidates(base_url):
             url = f"{candidate}{path}"
             try:
+                logging.debug("Gateway proxy request %s %s", method, url)
                 response = await client.request(method, url, **clean_kwargs)
+                logging.debug("Gateway upstream response %s %s %s", method, url, response.status_code)
                 break
             except httpx.RequestError as exc:
-                upstream_errors.append(str(exc.request.url))
+                error_message = f"{url}: {exc}"
+                logging.error("Gateway upstream request failed: %s", error_message)
+                upstream_errors.append(error_message)
         else:
+            logging.error("Gateway upstream service unavailable for %s %s: %s", method, path, upstream_errors)
             raise HTTPException(
                 status_code=502,
                 detail=f"Upstream service unavailable: {', '.join(upstream_errors)}",
@@ -64,6 +67,7 @@ async def proxy_json(method: str, base_url: str, path: str, **kwargs):
             payload = {"message": response.text}
         if response.is_error:
             detail = payload.get("detail", payload) if isinstance(payload, dict) else payload
+            logging.error("Gateway upstream returned error %s %s %s %s", method, url, response.status_code, detail)
             raise HTTPException(status_code=response.status_code, detail=detail)
         return payload
 

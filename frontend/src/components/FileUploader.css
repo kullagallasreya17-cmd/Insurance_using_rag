@@ -53,16 +53,107 @@
 .result-card,
 .history-panel {
     background: #F8FAFC;
-    padding: 15px;
-    border-radius: 10px;
+    padding: 18px;
+    border-radius: 14px;
     border: 1px solid #CBD5E1;
 }
 
 .file-details p,
 .result-card p,
 .history-panel p {
-    margin: 6px 0;
+    margin: 8px 0;
     color: #334155;
+}
+
+.result-card ul,
+.history-panel ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.result-card li,
+.history-panel li {
+    background: white;
+    border: 1px solid #E2E8F0;
+    border-radius: 12px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.result-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.document-name {
+    font-weight: 700;
+    color: #1E3A8A;
+}
+
+.file-status {
+    font-size: 0.95rem;
+    font-weight: 700;
+    text-transform: capitalize;
+    padding: 4px 10px;
+    border-radius: 999px;
+}
+
+.file-status.processing {
+    background: #e0f2fe;
+    color: #0c4a6e;
+}
+
+.file-status.indexed {
+    background: #dcfce7;
+    color: #166534;
+}
+
+.file-status.failed {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.file-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 10px;
+    color: #475569;
+    font-size: 0.95rem;
+}
+
+.status-note {
+    margin: 0;
+    font-size: 0.92rem;
+    color: #475569;
+}
+
+.status-note.error {
+    color: #b91c1c;
+}
+
+.history-panel li {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr;
+    gap: 12px;
+    align-items: center;
+    padding: 14px;
+}
+
+.history-panel span {
+    display: block;
+    color: #334155;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .upload-card button {

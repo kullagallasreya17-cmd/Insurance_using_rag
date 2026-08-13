@@ -28,19 +28,19 @@ function App() {
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
         <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-        <Route path="/upload-policy" element={<ProtectedRoute><UploadPolicy /></ProtectedRoute>} />
-        <Route path="/upload-reports" element={<ProtectedRoute><UploadReports /></ProtectedRoute>} />
+        <Route path="/upload-policy" element={<ProtectedRoute requiredRoles={["admin", "agent"]}><UploadPolicy /></ProtectedRoute>} />
+        <Route path="/upload-reports" element={<ProtectedRoute requiredRoles={["admin", "agent"]}><UploadReports /></ProtectedRoute>} />
         <Route path="/documents" element={<ProtectedRoute><Documents /></ProtectedRoute>} />
         <Route path="/policies" element={<ProtectedRoute><Policies /></ProtectedRoute>} />
         <Route path="/claim-analysis" element={<ProtectedRoute><ClaimAnalysis /></ProtectedRoute>} />
         <Route path="/claims" element={<ProtectedRoute><ClaimAnalysis /></ProtectedRoute>} />
         <Route path="/claims/:id" element={<ProtectedRoute><ClaimDetails /></ProtectedRoute>} />
         <Route path="/chatbot" element={<ProtectedRoute><Chatbot /></ProtectedRoute>} />
-        <Route path="/analytics" element={<ProtectedRoute><Analytics /></ProtectedRoute>} />
+        <Route path="/analytics" element={<ProtectedRoute requiredRoles={["admin", "analyst"]}><Analytics /></ProtectedRoute>} />
         <Route path="/notifications" element={<ProtectedRoute><Notifications /></ProtectedRoute>} />
         <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
         <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
-        <Route path="/admin" element={<ProtectedRoute><AdminDashboard /></ProtectedRoute>} />
+        <Route path="/admin" element={<ProtectedRoute requiredRole="admin"><AdminDashboard /></ProtectedRoute>} />
       </Routes>
     </BrowserRouter>
   );

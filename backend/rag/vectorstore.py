@@ -115,6 +115,8 @@ class MongoBruteForceVectorStore:
         # Create standard metadata indexes to support filtering.
         self._collection.create_index([("category", 1)])
         self._collection.create_index([("document_type", 1)])
+        self._collection.create_index([("source", 1)])
+        self._collection.create_index([("title", 1)])
 
     def add_texts(
         self,

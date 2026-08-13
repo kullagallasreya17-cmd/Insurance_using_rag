@@ -54,13 +54,14 @@ services:
     env_file:
       - backend/.env
     environment:
-      INDEXING_BACKEND: mongo
+      INDEXING_BACKEND: rq
       CACHE_BACKEND: mongo
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       - redis
-    # Use the backend image entrypoint to run the RQ worker command
+    entrypoint: ["/usr/local/bin/rq-worker-entrypoint.sh"]
     command: ["rq", "worker", "rag-indexing", "--url", "redis://redis:6379/0"]
-    restart: on-failure
+    restart: unless-stopped
 
   ai:
     build: ./services/ai
@@ -83,8 +84,9 @@ services:
     env_file:
       - backend/.env
     environment:
-      INDEXING_BACKEND: mongo
+      INDEXING_BACKEND: rq
       CACHE_BACKEND: mongo
+      REDIS_URL: redis://redis:6379/0
       STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
       S3_BUCKET: ${S3_BUCKET:-}
       S3_PREFIX: ${S3_PREFIX:-insurance-documents}

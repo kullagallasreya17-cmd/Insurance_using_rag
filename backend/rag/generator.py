@@ -2,6 +2,19 @@ import os
 
 
 LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "15"))
+LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "0"))
+
+
+def _is_quota_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    quota_markers = (
+        "quota",
+        "rate limit",
+        "ratelimit",
+        "resource exhausted",
+        "429",
+    )
+    return any(marker in message for marker in quota_markers)
 
 
 def _format_context(documents):
@@ -21,7 +34,7 @@ def _format_context(documents):
     return "\n\n".join(context_parts)
 
 
-def _fallback_answer(question, documents):
+def _fallback_answer(question, documents, reason=None):
     if not documents:
         return (
             "I couldn't find any indexed insurance document chunks to answer from. "
@@ -39,9 +52,18 @@ def _fallback_answer(question, documents):
             "I found retrieved document records, but they did not contain readable text for this question."
         )
 
+    if reason == "quota":
+        availability_message = (
+            "I found relevant insurance document context, but the LLM quota or rate limit has been exceeded. "
+        )
+    else:
+        availability_message = (
+            "I found relevant insurance document context, but the LLM service is currently unavailable or slow. "
+        )
+
     return (
-        "I found relevant insurance document context, but the LLM service is currently unavailable or slow. "
-        f"Based on the retrieved context for '{question}', the most relevant details are: "
+        availability_message
+        + f"Based on the retrieved context for '{question}', the most relevant details are: "
         + " ".join(snippets)
     )
 
@@ -49,12 +71,19 @@ def _fallback_answer(question, documents):
 def _build_llm(temperature: float):
     from langchain_google_genai import ChatGoogleGenerativeAI
 
-    return ChatGoogleGenerativeAI(
-        model=os.getenv("GOOGLE_GENAI_MODEL", "gemini-2.5-flash"),
-        google_api_key=os.getenv("GOOGLE_API_KEY"),
-        temperature=temperature,
-        timeout=LLM_TIMEOUT_SECONDS,
-    )
+    llm_kwargs = {
+        "model": os.getenv("GOOGLE_GENAI_MODEL", "gemini-2.5-flash"),
+        "google_api_key": os.getenv("GOOGLE_API_KEY"),
+        "temperature": temperature,
+        "timeout": LLM_TIMEOUT_SECONDS,
+        "max_retries": LLM_MAX_RETRIES,
+    }
+
+    try:
+        return ChatGoogleGenerativeAI(**llm_kwargs)
+    except TypeError:
+        llm_kwargs.pop("max_retries", None)
+        return ChatGoogleGenerativeAI(**llm_kwargs)
 
 
 def generate_answer(question, documents):
@@ -94,7 +123,7 @@ Answer:
         return response.content
     except Exception as exc:
         print(f"LLM generation unavailable: {exc}")
-        return _fallback_answer(question, documents)
+        return _fallback_answer(question, documents, reason="quota" if _is_quota_error(exc) else None)
 
 
 def generate_claim_analysis(question, documents, claim_amount=None, policy_category=None):
@@ -152,12 +181,17 @@ Question:
         return response.content
     except Exception as exc:
         print(f"LLM claim analysis unavailable: {exc}")
+        rationale = (
+            "The LLM quota or rate limit has been exceeded, so the claim needs manual review."
+            if _is_quota_error(exc)
+            else "LLM service is unavailable or timed out, so the claim needs manual review."
+        )
         return """{
   "decision": "needs_review",
   "confidence": "low",
-  "rationale": "LLM service is unavailable or timed out, so the claim needs manual review.",
+  "rationale": "%s",
   "covered_items": [],
   "exclusions": [],
   "missing_information": ["LLM service response"],
   "next_steps": ["Retry analysis later or review the claim manually"]
-}"""
+}""" % rationale
