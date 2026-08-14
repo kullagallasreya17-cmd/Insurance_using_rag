@@ -6,9 +6,9 @@ import Sidebar from "../components/Sidebar";
 import FileUploader from "../components/FileUploader";
 
 const CATEGORY_LABELS = {
-  health_policy: "Health",
-  vehicle_policy: "Vehicle",
-  life_policy: "Life",
+  health_policy: "Health Policy",
+  vehicle_policy: "Vehicle Policy",
+  life_policy: "Life Policy",
   claim_procedure: "Claim Procedure",
   terms_conditions: "Terms & Conditions",
   faq: "FAQ",
@@ -89,23 +89,7 @@ function UploadPolicy() {
 
           </div>
 
-          <div style={{ margin: "12px 0", display: "flex", flexWrap: "wrap", gap: 8 }}>
-            {loadingCategories ? (
-              <p>Loading categories...</p>
-            ) : categories.length > 0 ? (
-              categories.map((categoryKey) => (
-                <button
-                  key={categoryKey}
-                  className={`table-action-button ${selectedCategory === categoryKey ? "" : "secondary"}`}
-                  onClick={() => setSelectedCategory(categoryKey)}
-                >
-                  {CATEGORY_LABELS[categoryKey] || categoryKey.replace(/_/g, " ")}
-                </button>
-              ))
-            ) : (
-              <p className="category-error">{categoryError}</p>
-            )}
-          </div>
+          {/* Category quick-buttons removed per request; selection is available in the dropdown below. */}
 
           <FileUploader
             title="Upload Policy or Report"
