@@ -252,9 +252,27 @@ function ChatBox() {
     }
 
     const sourceList = msg.sources || msg.citations || [];
-    const normalizedSources = sourceList.map((source) => {
-      if (typeof source === "string") return source;
-      return `${source.source || "Unknown source"}${source.page ? ` • Page ${source.page}` : ""}`;
+
+    // Group citations by document source and collect unique pages in first-seen order.
+    const grouped = [];
+    const sourceIndex = {};
+    sourceList.forEach((s) => {
+      if (typeof s === "string") {
+        // Keep string sources as-is (no grouping)
+        grouped.push({ sourceLabel: s, pages: [] });
+        return;
+      }
+      const src = s.source || "Unknown source";
+      const page = s.page || null;
+      if (Object.prototype.hasOwnProperty.call(sourceIndex, src)) {
+        const idx = sourceIndex[src];
+        if (page && !grouped[idx].pages.includes(page)) {
+          grouped[idx].pages.push(page);
+        }
+      } else {
+        sourceIndex[src] = grouped.length;
+        grouped.push({ sourceLabel: src, pages: page ? [page] : [] });
+      }
     });
 
     return (
@@ -262,13 +280,18 @@ function ChatBox() {
         <div className="message-content">
           <p>{msg.text}</p>
 
-          {normalizedSources.length > 0 && (
+          {grouped.length > 0 && (
             <div className="sources-panel">
-              <strong>📄 Sources Used:</strong>
+              <strong>📄 Sources:</strong>
               <ul>
-                {normalizedSources.map((source, idx) => (
+                {grouped.map((g, idx) => (
                   <li key={idx}>
-                    <span>{source}</span>
+                    <div>{g.sourceLabel}</div>
+                    {g.pages && g.pages.length > 0 && (
+                      <div style={{ marginLeft: 8 }}>
+                        <small>Pages: {g.pages.join(", ")}</small>
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>

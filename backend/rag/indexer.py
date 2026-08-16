@@ -1,4 +1,5 @@
 import re
+import hashlib
 from pathlib import Path
 
 from langchain_community.document_loaders import PyPDFLoader
@@ -6,7 +7,7 @@ from pypdf import PdfReader
 
 from rag.ocr_loader import load_image_document
 from rag.text_splitter import split_documents
-from rag.vectorstore import get_mongo_vector_store
+from rag.vectorstore import get_mongo_vector_store, get_mongo_collection, MONGO_TEXT_KEY
 
 
 def _load_supported_file(file_path: Path, content_type: str):
@@ -75,10 +76,62 @@ def index_document(file_path: Path, document_type: str, category: str, content_t
             "No readable text found in the uploaded PDF. Please upload a text-based PDF or a PDF with extractable content."
         )
 
+    # Deduplicate chunk texts against existing stored chunks to avoid duplicate indexing
+    collection = get_mongo_collection()
+    unique_texts = []
+    unique_metadatas = []
+    # Compute SHA256 fingerprint of the file to detect exact-file duplicates
+    sha256_digest = None
+    try:
+        hasher = hashlib.sha256()
+        with open(file_path, "rb") as fh:
+            for chunk_bytes in iter(lambda: fh.read(1024 * 1024), b""):
+                hasher.update(chunk_bytes)
+        sha256_digest = hasher.hexdigest()
+    except Exception:
+        sha256_digest = None
+
+    if sha256_digest:
+        # If the collection already contains this file fingerprint, skip indexing.
+        try:
+            if collection.find_one({"sha256": sha256_digest}):
+                raise ValueError("This document appears to have already been indexed (sha256 match).")
+        except ValueError:
+            raise
+        except Exception:
+            # If the DB check fails, continue with conservative per-chunk deduping below.
+            pass
+    for chunk in chunks:
+        content = (chunk.page_content or "").strip()
+        if not content:
+            continue
+
+        # Attach file-level fingerprint so retrieval and dedup can use it later
+        if sha256_digest:
+            try:
+                chunk.metadata["sha256"] = sha256_digest
+            except Exception:
+                pass
+
+        # Use exact match on the text key to detect duplicate chunks (conservative)
+        try:
+            exists = collection.find_one({MONGO_TEXT_KEY: content})
+        except Exception:
+            exists = None
+
+        if exists:
+            continue
+
+        unique_texts.append(content)
+        unique_metadatas.append(chunk.metadata)
+
+    if not unique_texts:
+        raise ValueError(
+            "All document text chunks appear to be duplicates of existing indexed content. Skipping indexing."
+        )
+
     vector_store = get_mongo_vector_store()
-    texts = [chunk.page_content for chunk in chunks]
-    metadatas = [chunk.metadata for chunk in chunks]
-    vector_store.add_texts(texts=texts, metadatas=metadatas)
+    vector_store.add_texts(texts=unique_texts, metadatas=unique_metadatas)
 
     word_count = _count_words_in_pages(valid_pages)
 

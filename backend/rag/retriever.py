@@ -143,6 +143,23 @@ def _build_query_filter(query: str, category: str | None = None) -> dict | None:
     if category:
         query_filter["category"] = category
 
+    # If a category is provided, prefer sources that belong to that category
+    # to avoid returning documents from other policy types (e.g. life vs health).
+    if category and policy_sources:
+        collection = get_mongo_collection()
+        try:
+            sources_in_category = set(collection.distinct("source", {"category": category}))
+            filtered = [s for s in policy_sources if s in sources_in_category]
+            if filtered:
+                policy_sources = filtered
+            else:
+                # If none of the found policy_sources belong to the requested category,
+                # ignore the name-based sources and rely on the category filter only.
+                policy_sources = []
+        except Exception:
+            # If the DB lookup fails for any reason, fall back to conservative behavior
+            # and rely only on the explicit category filter (already set above).
+            policy_sources = []
     if policy_sources:
         if len(policy_sources) == 1:
             if _is_compare_query(query):
@@ -169,16 +186,35 @@ def _build_query_filter(query: str, category: str | None = None) -> dict | None:
     return query_filter if query_filter else None
 
 
-def retrieve_documents_with_scores(query, category: str | None = None):
+def retrieve_documents_with_scores(query, category: str | None = None, override_filter: dict | None = None):
     vector_store = get_mongo_vector_store()
-    query_filter = _build_query_filter(query, category=category)
+    query_filter = override_filter if override_filter is not None else _build_query_filter(query, category=category)
 
     docs_with_scores = vector_store.similarity_search_with_score(
         query,
-        k=6,
+        k=20,
         filter=query_filter,
     )
-    docs_with_scores = sorted(docs_with_scores, key=lambda item: item[1], reverse=True)[:6]
+
+    # Deduplicate returned chunks/documents by an identifying metadata key such as
+    # `sha256`, `source` or `storage_key`. Keep the highest-scoring chunk per document.
+    seen_keys = {}
+    deduped: list[tuple[object, float]] = []
+    for doc, score in sorted(docs_with_scores, key=lambda item: item[1], reverse=True):
+        meta = doc.metadata or {}
+        dedup_key = meta.get("sha256") or meta.get("source") or meta.get("storage_key") or meta.get("title")
+        if not dedup_key:
+            # fallback to using first 200 chars of text as a key (conservative)
+            dedup_key = (doc.page_content or "")[:200]
+
+        if dedup_key in seen_keys:
+            # already have a higher or equal scored chunk for this document
+            continue
+
+        seen_keys[dedup_key] = score
+        deduped.append((doc, float(score)))
+
+    docs_with_scores = deduped[:6]
 
     print("\n========== Retrieved Chunks ==========")
     if not docs_with_scores:
@@ -195,5 +231,80 @@ def retrieve_documents_with_scores(query, category: str | None = None):
 
 
 def retrieve_documents(query, category: str | None = None):
-    docs_with_scores = retrieve_documents_with_scores(query, category=category)
-    return [doc for doc, _score in docs_with_scores]
+    # Transform and possibly split the query into focused sub-queries
+    parts = _query_transform(query)
+
+    # If the original query refers to a specific known source, prefer that filter
+    forced_filter = _build_query_filter(query, category=category)
+
+    aggregated: list[tuple[object, float]] = []
+    seen_keys = set()
+
+    def _add_results(results):
+        for d, s in results:
+            meta = d.metadata or {}
+            dedup_key = (
+                meta.get("sha256")
+                or meta.get("source")
+                or meta.get("storage_key")
+                or meta.get("title")
+                or (d.page_content or "")[:200]
+            )
+            if dedup_key in seen_keys:
+                continue
+            seen_keys.add(dedup_key)
+            aggregated.append((d, s))
+
+    # For each transformed part, run a small set of expanded queries and collect unique docs
+    for part in parts:
+        expansions = _expand_query(part)
+        for q in expansions:
+            results = retrieve_documents_with_scores(q, category=category, override_filter=forced_filter)
+            _add_results(results)
+            if len(aggregated) >= 6:
+                break
+        if len(aggregated) >= 6:
+            break
+
+    # Return up to 6 documents
+    return [doc for doc, _score in aggregated[:6]]
+
+
+def _query_transform(query: str) -> list[str]:
+    """Apply basic query transformation/expansion.
+
+    - If the query contains explicit document mentions (policy names), keep as-is and
+        return single transformed query that will be filtered by source elsewhere.
+    - If the query is a long compound question (contains ' and ' or comma), split into
+        sub-questions to retrieve targeted context per sub-question.
+    - Otherwise return the original query.
+    """
+    q = _normalize_text(query)
+    # If contains multiple clauses separated by ' and ' or commas, split
+    if "," in query or " and " in q:
+        parts = [part.strip() for part in re.split(r",| and |;", query) if part.strip()]
+        if len(parts) > 1:
+            return parts
+
+    return [query]
+
+
+def _expand_query(query: str) -> list[str]:
+    q = query.strip()
+    expansions = [q]
+    # Short queries get modest expansions to improve recall
+    tokens = _distinctive_tokens(q)
+    if tokens:
+        expansions.append(" ".join(tokens))
+        if len(tokens) <= 3:
+            expansions.append(f"{q} coverage")
+            expansions.append(f"{q} benefits")
+            expansions.append(f"what is {q}")
+    # Keep original at front, unique the list while preserving order
+    seen = set()
+    out = []
+    for item in expansions:
+        if item and item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out

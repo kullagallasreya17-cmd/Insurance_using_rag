@@ -56,8 +56,8 @@ KNOWLEDGE_CATEGORIES = [
 
 ROLE_CATEGORY_ACCESS = {
     "admin": None,
-    "analyst": {"health_policy", "vehicle_policy", "life_policy", "claim_procedure", "medical_document", "other"},
-    "agent": {"health_policy", "medical_document", "other"},
+    "analyst": {"health_policy", "vehicle_policy", "life_policy", "claim_procedure", "other"},
+    "agent": {"health_policy", "other"},
     "auditor": {"health_policy", "vehicle_policy", "life_policy", "claim_procedure", "terms_conditions", "faq", "other"},
 }
 
@@ -157,6 +157,8 @@ def process_indexing_job(job: dict):
         return
 
     try:
+        # mark document as processing
+        db.documents.update_one({"id": document_id}, {"$set": {"status": "processing", "started_indexing_at": datetime.utcnow()}})
         with storage.open_for_read(document) as file_path:
             if not file_path.exists():
                 raise FileNotFoundError("Stored document file not found")
@@ -170,10 +172,7 @@ def process_indexing_job(job: dict):
     except Exception as exc:
         error_message = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
         logging.error("Indexing failed for document %s: %s", document_id, error_message)
-        db.documents.update_one(
-            {"id": document_id},
-            {"$set": {"status": "failed"}},
-        )
+        db.documents.update_one({"id": document_id}, {"$set": {"status": "failed", "indexing_error": str(exc), "indexing_error_trace": traceback.format_exc()}})
         log_audit_event(
             db,
             actor=job.get("uploaded_by", "system"),
@@ -228,7 +227,7 @@ def enqueue_indexing_job(payload: dict) -> str:
 
 def get_accessible_categories(role: str | None):
     if not role:
-        return {"health_policy", "medical_document"}
+        return {"health_policy"}
     categories = ROLE_CATEGORY_ACCESS.get((role or "").lower())
     return categories
 
@@ -926,6 +925,26 @@ def debug_retrieve(request: ChatRequest, current_user = Depends(get_current_user
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/debug/llm")
+def debug_llm():
+    """Lightweight LLM health check: attempts to instantiate the configured LLM client."""
+    try:
+        from rag.generator import _build_llm
+        import os
+
+        if not os.getenv("GOOGLE_API_KEY"):
+            return {"configured": False, "reason": "GOOGLE_API_KEY is not set"}
+
+        try:
+            llm = _build_llm(temperature=0.0)
+            # Do not invoke the model here to avoid consuming quota — just return success on instantiation.
+            return {"configured": True, "model": os.getenv("GOOGLE_GENAI_MODEL", "gemini-2.5-flash")}
+        except Exception as exc:
+            return {"configured": False, "reason": str(exc)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/document/{document_id}/reindex")
 def reindex_document(
     document_id: int,
@@ -1056,10 +1075,22 @@ def upload_document(
 
     DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    existing_record = db.documents.find_one(
-        {"filename": original_name, "category": category},
-        sort=[("created_at", -1)],
-    )
+    # Calculate SHA-256 of the uploaded file to detect duplicates
+    import hashlib
+
+    try:
+        hasher = hashlib.sha256()
+        file.file.seek(0)
+        while chunk := file.file.read(1024 * 1024):
+            hasher.update(chunk)
+        sha256_digest = hasher.hexdigest()
+    finally:
+        try:
+            file.file.seek(0)
+        except Exception:
+            pass
+
+    existing_record = db.documents.find_one({"sha256": sha256_digest})
 
     if existing_record and not replace_existing:
         return JSONResponse(
@@ -1085,12 +1116,14 @@ def upload_document(
     saved_storage = None
 
     try:
+        # Save file to storage
         saved_storage = storage.save(file.file, safe_name, file.content_type or "application/octet-stream")
 
         document_id = get_next_id("documents")
         record = {
             "id": document_id,
             "filename": original_name,
+            "sha256": sha256_digest,
             "stored_path": saved_storage["stored_path"],
             "storage_backend": saved_storage["storage_backend"],
             "storage_key": saved_storage["storage_key"],

@@ -42,10 +42,18 @@ def _fallback_answer(question, documents, reason=None):
         )
 
     snippets = []
-    for doc in documents[:3]:
+    seen = set()
+    for doc in documents:
         text = " ".join((doc.page_content or "").split())
-        if text:
-            snippets.append(text[:450])
+        if not text:
+            continue
+        excerpt = text[:450]
+        if excerpt in seen:
+            continue
+        seen.add(excerpt)
+        snippets.append(excerpt)
+        if len(snippets) >= 3:
+            break
 
     if not snippets:
         return (
@@ -86,6 +94,34 @@ def _build_llm(temperature: float):
         return ChatGoogleGenerativeAI(**llm_kwargs)
 
 
+def _invoke_with_retries(llm, prompt: str):
+    import time
+
+    attempts = max(1, LLM_MAX_RETRIES + 1)
+    backoff = 1.0
+    last_exc = None
+    for attempt in range(1, attempts + 1):
+        try:
+            response = llm.invoke(prompt)
+            if hasattr(response, "content"):
+                return response.content
+            return str(response)
+        except Exception as exc:
+            last_exc = exc
+            if _is_quota_error(exc):
+                # If it's a quota/rate-limit issue, bail out immediately so caller can fallback.
+                raise
+            if attempt >= attempts:
+                break
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 10)
+
+    # Re-raise the final exception for the caller to handle
+    if last_exc:
+        raise last_exc
+    return None
+
+
 def generate_answer(question, documents):
 
     if not documents:
@@ -119,14 +155,13 @@ Answer:
 """
 
     try:
-        response = llm.invoke(prompt)
-        return response.content
+        return _invoke_with_retries(llm, prompt)
     except Exception as exc:
-        print(f"LLM generation unavailable: {exc}")
+        print(f"LLM generation unavailable: {type(exc).__name__}: {exc}")
         return _fallback_answer(question, documents, reason="quota" if _is_quota_error(exc) else None)
 
 
-def generate_claim_analysis(question, documents, claim_amount=None, policy_category=None):
+def generate_claim_analysis(question, documents, claim_amount=None, policy_category=None, admission_date=None):
     if not os.getenv("GOOGLE_API_KEY"):
         return """{
   "decision": "needs_review",
@@ -134,6 +169,9 @@ def generate_claim_analysis(question, documents, claim_amount=None, policy_categ
   "rationale": "LLM service is not configured, so the claim needs manual review.",
   "covered_items": [],
   "exclusions": [],
+  "policy_start_date": null,
+  "admission_date": null,
+  "waiting_period_months": null,
   "missing_information": ["LLM service configuration"],
   "next_steps": ["Configure GOOGLE_API_KEY or review the claim manually"]
 }"""
@@ -147,15 +185,18 @@ You are an enterprise insurance claim analysis engine.
 
 Use only the retrieved policy and medical context provided below. Do not invent benefits or exclusions.
 Return valid JSON only, with no markdown fences and no explanatory text. Use exactly these keys:
-{{
+{
   "decision": "approved" | "rejected" | "needs_review",
   "confidence": "low" | "medium" | "high",
   "rationale": "short explanation grounded in the provided context",
   "covered_items": [],
   "exclusions": [],
+  "policy_start_date": null,
+  "admission_date": null,
+  "waiting_period_months": null,
   "missing_information": [],
   "next_steps": []
-}}
+}
 
 Rules:
 - If the context clearly shows the claim is covered, return approved.
@@ -168,6 +209,7 @@ Rules:
 
 Claim amount: {claim_amount}
 Policy category: {policy_category}
+Admission date: {admission_date}
 
 Context:
 {context}
@@ -177,10 +219,9 @@ Question:
 """
 
     try:
-        response = llm.invoke(prompt)
-        return response.content
+        return _invoke_with_retries(llm, prompt)
     except Exception as exc:
-        print(f"LLM claim analysis unavailable: {exc}")
+        print(f"LLM claim analysis unavailable: {type(exc).__name__}: {exc}")
         rationale = (
             "The LLM quota or rate limit has been exceeded, so the claim needs manual review."
             if _is_quota_error(exc)
@@ -192,6 +233,9 @@ Question:
   "rationale": "%s",
   "covered_items": [],
   "exclusions": [],
+  "policy_start_date": null,
+  "admission_date": null,
+  "waiting_period_months": null,
   "missing_information": ["LLM service response"],
   "next_steps": ["Retry analysis later or review the claim manually"]
 }""" % rationale

@@ -50,6 +50,20 @@ class MongoAtlasVectorStore(DocumentDBVectorSearch):
         if not filter:
             filter = {}
 
+        # Map enum similarity to Atlas expected string values
+        similarity_value = None
+        try:
+            from langchain_community.vectorstores.documentdb import DocumentDBSimilarityType
+
+            if self._similarity_type == DocumentDBSimilarityType.COS:
+                similarity_value = "cosine"
+            elif self._similarity_type == DocumentDBSimilarityType.EUC:
+                similarity_value = "euclidean"
+            elif self._similarity_type == DocumentDBSimilarityType.DOT:
+                similarity_value = "dotProduct"
+        except Exception:
+            similarity_value = None
+
         pipeline = [
             {"$match": filter},
             {
@@ -57,7 +71,7 @@ class MongoAtlasVectorStore(DocumentDBVectorSearch):
                     "vectorSearch": {
                         "vector": embeddings,
                         "path": self._embedding_key,
-                        "similarity": self._similarity_type,
+                        "similarity": similarity_value or self._similarity_type,
                         "k": k,
                         "efSearch": ef_search,
                     }
@@ -236,7 +250,25 @@ def get_mongo_vector_store() -> Any:
                     return fallback
                 raise
 
-        return vector_store
+        # Quick runtime check to ensure Atlas search is operational; fall back if any error occurs.
+        try:
+            _ = vector_store.similarity_search_with_score("test connectivity check", k=1)
+            return vector_store
+        except Exception as exc:
+            logging.warning("Atlas vector search runtime check failed: %s. Falling back to brute-force.", exc)
+            if MONGO_FALLBACK_TO_BRUTE_FORCE:
+                fallback = MongoBruteForceVectorStore(
+                    collection=collection,
+                    embedding=embedding_model,
+                    text_key=MONGO_TEXT_KEY,
+                    embedding_key=MONGO_EMBEDDING_KEY,
+                )
+                fallback.create_index(
+                    dimensions=EMBEDDING_DIM,
+                    similarity=DocumentDBSimilarityType.COS,
+                )
+                return fallback
+            raise
 
     fallback = MongoBruteForceVectorStore(
         collection=collection,
