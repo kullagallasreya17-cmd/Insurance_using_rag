@@ -2,11 +2,16 @@ import { useEffect, useMemo, useState } from "react";
 import api from "../api";
 import PortalLayout from "../components/PortalLayout";
 
-const FILTER_OPTIONS = ["All", "Health", "Vehicle", "Life", "FAQ", "Claim Procedure", "Others"];
+const FILTER_OPTIONS = ["All", "Health", "Vehicle", "Life", "Home", "Travel", "Accident", "Critical Illness", "Property", "FAQ", "Claim Procedure", "Others"];
 const ICONS = {
   health: "🏥",
   vehicle: "🚗",
   life: "❤️",
+  home: "🏠",
+  travel: "✈️",
+  accident: "🛡️",
+  critical: "💙",
+  property: "🏢",
   faq: "📄",
   claim: "📋",
 };
@@ -30,9 +35,14 @@ function Policies() {
         if (activeFilter === "Health") return policy.category.includes("health");
         if (activeFilter === "Vehicle") return policy.category.includes("vehicle");
         if (activeFilter === "Life") return policy.category.includes("life");
+        if (activeFilter === "Home") return policy.category.includes("home");
+        if (activeFilter === "Travel") return policy.category.includes("travel");
+        if (activeFilter === "Accident") return policy.category.includes("accident");
+        if (activeFilter === "Critical Illness") return policy.category.includes("critical");
+        if (activeFilter === "Property") return policy.category.includes("property");
         if (activeFilter === "FAQ") return policy.category.includes("faq");
         if (activeFilter === "Claim Procedure") return policy.category.includes("claim");
-        if (activeFilter === "Others") return !["health", "vehicle", "life", "faq", "claim"].some((k) => policy.category.includes(k));
+        if (activeFilter === "Others") return !["health", "vehicle", "life", "home", "travel", "accident", "critical", "property", "faq", "claim"].some((k) => policy.category.includes(k));
         return true;
       })();
 
@@ -41,7 +51,17 @@ function Policies() {
   }, [policies, searchText, activeFilter]);
 
   const getPolicyIcon = (category) => {
-    const key = category.includes("vehicle") ? "vehicle" : category.includes("health") ? "health" : category.includes("life") ? "life" : category.includes("claim") ? "claim" : "faq";
+    const normalized = String(category || "").toLowerCase();
+    const key = normalized.includes("vehicle") ? "vehicle"
+      : normalized.includes("health") ? "health"
+      : normalized.includes("life") ? "life"
+      : normalized.includes("home") ? "home"
+      : normalized.includes("travel") ? "travel"
+      : normalized.includes("accident") ? "accident"
+      : normalized.includes("critical") ? "critical"
+      : normalized.includes("property") ? "property"
+      : normalized.includes("claim") ? "claim"
+      : "faq";
     return ICONS[key] || "📘";
   };
 

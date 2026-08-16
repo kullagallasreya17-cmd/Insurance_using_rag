@@ -14,10 +14,14 @@ React + FastAPI application for insurance document ingestion, grounded RAG chat,
 
 ## Run Backend
 
+Use the normal startup command below on Windows. Avoid `--reload` in PowerShell because the Uvicorn file watcher can hit a Windows socket/watch error and keep reloading unnecessarily.
+
 ```powershell
 cd D:\projects\Insurance_using_RAG\backend
-.\.venv\Scripts\python.exe -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
+.\.venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
 ```
+
+If you want live reload while coding, prefer a Linux shell or run the backend through Docker instead of enabling the Windows file watcher.
 
 ## Run Frontend
 

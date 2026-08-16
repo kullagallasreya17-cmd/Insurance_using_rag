@@ -26,10 +26,20 @@ class RetrievalAgent:
             return "claim_procedure"
         if "health policy" in normalized or "health_policy" in normalized:
             return "health_policy"
-        if "vehicle policy" in normalized or "vehicle_policy" in normalized:
+        if "vehicle policy" in normalized or "vehicle_policy" in normalized or "car insurance" in normalized:
             return "vehicle_policy"
-        if "life policy" in normalized or "life_policy" in normalized:
+        if "life policy" in normalized or "life_policy" in normalized or "term insurance" in normalized:
             return "life_policy"
+        if "home policy" in normalized or "home_policy" in normalized or "home insurance" in normalized:
+            return "home_policy"
+        if "travel policy" in normalized or "travel_policy" in normalized or "travel insurance" in normalized:
+            return "travel_policy"
+        if "personal accident" in normalized or "personal_accident_policy" in normalized:
+            return "personal_accident_policy"
+        if "critical illness" in normalized or "critical_illness_policy" in normalized:
+            return "critical_illness_policy"
+        if "property policy" in normalized or "property_policy" in normalized:
+            return "property_policy"
         return None
 
     def retrieve(self, query: str, category: str | None = None):

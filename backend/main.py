@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 import time
 import traceback
 from contextlib import asynccontextmanager
@@ -7,6 +8,11 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 import mimetypes
+
+if sys.platform == "win32":
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile, Request
@@ -47,6 +53,11 @@ KNOWLEDGE_CATEGORIES = [
     "health_policy",
     "vehicle_policy",
     "life_policy",
+    "home_policy",
+    "travel_policy",
+    "personal_accident_policy",
+    "critical_illness_policy",
+    "property_policy",
     "claim_procedure",
     "terms_conditions",
     "faq",
@@ -56,9 +67,43 @@ KNOWLEDGE_CATEGORIES = [
 
 ROLE_CATEGORY_ACCESS = {
     "admin": None,
-    "analyst": {"health_policy", "vehicle_policy", "life_policy", "claim_procedure", "other"},
-    "agent": {"health_policy", "other"},
-    "auditor": {"health_policy", "vehicle_policy", "life_policy", "claim_procedure", "terms_conditions", "faq", "other"},
+    "analyst": {
+        "health_policy",
+        "vehicle_policy",
+        "life_policy",
+        "home_policy",
+        "travel_policy",
+        "personal_accident_policy",
+        "critical_illness_policy",
+        "property_policy",
+        "claim_procedure",
+        "other",
+    },
+    "agent": {
+        "health_policy",
+        "vehicle_policy",
+        "life_policy",
+        "home_policy",
+        "travel_policy",
+        "personal_accident_policy",
+        "critical_illness_policy",
+        "property_policy",
+        "other",
+    },
+    "auditor": {
+        "health_policy",
+        "vehicle_policy",
+        "life_policy",
+        "home_policy",
+        "travel_policy",
+        "personal_accident_policy",
+        "critical_illness_policy",
+        "property_policy",
+        "claim_procedure",
+        "terms_conditions",
+        "faq",
+        "other",
+    },
 }
 
 ROLE_PERMISSIONS = {
@@ -149,22 +194,37 @@ storage = get_storage()
 def process_indexing_job(job: dict):
     document_id = job.get("document_id")
     if not document_id:
+        logging.warning("Indexing job received without document_id: %s", job)
         return
 
     db = next(get_db())
     document = db.documents.find_one({"id": document_id})
     if not document:
+        logging.warning("Indexing job references missing document_id=%s payload=%s", document_id, job)
         return
 
+    stored_path = document.get("stored_path")
+    resolved_path = None
     try:
-        # mark document as processing
-        db.documents.update_one({"id": document_id}, {"$set": {"status": "processing", "started_indexing_at": datetime.utcnow()}})
+        db.documents.update_one(
+            {"id": document_id},
+            {"$set": {"status": "processing", "started_indexing_at": datetime.utcnow()}}
+        )
+
         with storage.open_for_read(document) as file_path:
-            if not file_path.exists():
-                raise FileNotFoundError("Stored document file not found")
+            resolved_path = Path(file_path) if isinstance(file_path, (str, Path)) else file_path
+            logging.info(
+                "Indexing document: document_id=%s stored_path=%s resolved_path=%s exists=%s",
+                document_id,
+                stored_path,
+                str(resolved_path) if resolved_path else None,
+                bool(resolved_path and resolved_path.exists()),
+            )
+            if not resolved_path or not resolved_path.exists():
+                raise FileNotFoundError(f"Stored document file not found for document_id={document_id}: {stored_path}")
 
             index_result = index_document(
-                file_path,
+                resolved_path,
                 job.get("document_type", document.get("document_type", "unknown")),
                 job.get("category", document.get("category", "unknown")),
                 job.get("content_type", document.get("content_type", "application/octet-stream")),
@@ -172,7 +232,15 @@ def process_indexing_job(job: dict):
     except Exception as exc:
         error_message = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
         logging.error("Indexing failed for document %s: %s", document_id, error_message)
-        db.documents.update_one({"id": document_id}, {"$set": {"status": "failed", "indexing_error": str(exc), "indexing_error_trace": traceback.format_exc()}})
+        db.documents.update_one(
+            {"id": document_id},
+            {"$set": {
+                "status": "failed",
+                "indexing_error": str(exc),
+                "indexing_error_trace": traceback.format_exc(),
+                "updated_at": datetime.utcnow(),
+            }}
+        )
         log_audit_event(
             db,
             actor=job.get("uploaded_by", "system"),
@@ -184,15 +252,19 @@ def process_indexing_job(job: dict):
         )
         raise
 
+    final_status = "indexed" if index_result.get("status") in {"indexed", "skipped", "completed"} else "failed"
     db.documents.update_one(
         {"id": document_id},
         {
             "$set": {
-                "status": "indexed",
+                "status": final_status,
                 "pages": index_result.get("pages", 0),
                 "chunks": index_result.get("chunks", 0),
                 "word_count": index_result.get("word_count", 0),
                 "processing_time_seconds": index_result.get("processing_time_seconds", 0),
+                "indexed_at": datetime.utcnow(),
+                "indexing_error": None,
+                "updated_at": datetime.utcnow(),
             }
         },
     )
@@ -204,7 +276,7 @@ def process_indexing_job(job: dict):
         action="index_document_completed",
         target_type="document",
         target_id=str(document_id),
-        details=f"Indexed {job.get('filename', document.get('filename', 'unknown'))} into {document.get('category', 'unknown')}",
+        details=f"Indexed {job.get('filename', document.get('filename', 'unknown'))} into {document.get('category', 'unknown')} with status={final_status}",
     )
 
 
@@ -216,13 +288,47 @@ if INDEXING_BACKEND == "mongo":
         lease_seconds=INDEXER_LEASE_SECONDS,
     )
 elif INDEXING_BACKEND == "rq":
-    background_indexer = RQJobIndexer(redis_url=REDIS_URL)
+    background_indexer = RQJobIndexer(redis_url=REDIS_URL, queue_name="rag-indexing")
 else:
     background_indexer = BackgroundIndexer(handler=process_indexing_job, worker_count=LOCAL_INDEXER_WORKERS)
 
 
+def _mask_redis_url(redis_url: str | None) -> str:
+    if not redis_url:
+        return "redis://<not-set>"
+    parsed = redis_url.split("@", 1)
+    if len(parsed) == 2:
+        user_info, host = parsed
+        return f"{user_info.split(':', 1)[0]}:***@{host}"
+    return redis_url
+
+
 def enqueue_indexing_job(payload: dict) -> str:
-    return background_indexer.enqueue(payload)
+    document_id = payload.get("document_id")
+    queue_name = "rag-indexing"
+    logging.info(
+        "Enqueueing indexing job: document_id=%s queue=%s redis_url=%s payload=%s",
+        document_id,
+        queue_name,
+        _mask_redis_url(REDIS_URL),
+        payload,
+    )
+    job_id = background_indexer.enqueue(payload)
+    try:
+        from rq import Queue
+        from redis import Redis
+
+        queue = Queue(queue_name, connection=Redis.from_url(REDIS_URL))
+        logging.info(
+            "Queue status after enqueue: document_id=%s queue=%s job_id=%s queue_length=%s",
+            document_id,
+            queue_name,
+            job_id,
+            len(queue),
+        )
+    except Exception:
+        logging.exception("Unable to read RQ queue length after enqueue for document_id=%s", document_id)
+    return job_id
 
 
 def get_accessible_categories(role: str | None):

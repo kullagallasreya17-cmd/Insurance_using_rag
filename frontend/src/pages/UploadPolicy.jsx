@@ -9,6 +9,11 @@ const CATEGORY_LABELS = {
   health_policy: "Health Policy",
   vehicle_policy: "Vehicle Policy",
   life_policy: "Life Policy",
+  home_policy: "Home Policy",
+  travel_policy: "Travel Policy",
+  personal_accident_policy: "Personal Accident Policy",
+  critical_illness_policy: "Critical Illness Policy",
+  property_policy: "Property Policy",
   claim_procedure: "Claim Procedure",
   terms_conditions: "Terms & Conditions",
   faq: "FAQ",
@@ -17,11 +22,16 @@ const CATEGORY_LABELS = {
 };
 
 function UploadPolicy() {
-  const [selectedCategory, setSelectedCategory] = useState("other");
+  const [selectedCategory, setSelectedCategory] = useState("health_policy");
   const [categories, setCategories] = useState([
     "health_policy",
     "vehicle_policy",
     "life_policy",
+    "home_policy",
+    "travel_policy",
+    "personal_accident_policy",
+    "critical_illness_policy",
+    "property_policy",
     "other",
   ]);
   const [loadingCategories, setLoadingCategories] = useState(true);

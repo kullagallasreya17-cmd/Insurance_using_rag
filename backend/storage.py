@@ -29,11 +29,12 @@ class ObjectStorage:
 
 class LocalStorage(ObjectStorage):
     def __init__(self, root: Path = LOCAL_STORAGE_DIR):
-        self.root = root
+        self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
 
     def save(self, fileobj: BinaryIO, key: str, content_type: str = "") -> dict:
         destination = self.root / Path(key).name
+        destination.parent.mkdir(parents=True, exist_ok=True)
         with destination.open("wb") as handle:
             while chunk := fileobj.read(1024 * 1024):
                 handle.write(chunk)
@@ -46,11 +47,18 @@ class LocalStorage(ObjectStorage):
 
     @contextmanager
     def open_for_read(self, document: dict) -> Iterator[Path]:
-        stored_path = Path(document.get("stored_path", ""))
-        if not stored_path.exists():
-            candidate = self.root / str(document.get("storage_key", ""))
-            stored_path = candidate if candidate.exists() else stored_path
-        yield stored_path
+        stored_path = document.get("stored_path")
+        candidates = []
+        if stored_path:
+            candidates.append(Path(stored_path))
+        storage_key = document.get("storage_key")
+        if storage_key:
+            candidates.append(self.root / str(storage_key))
+        if not stored_path and not storage_key:
+            candidates.append(self.root)
+
+        file_path = next((candidate for candidate in candidates if candidate and candidate.exists()), candidates[0] if candidates else Path(""))
+        yield file_path
 
     def delete(self, document: dict) -> None:
         for value in (document.get("stored_path"), self.root / str(document.get("storage_key", ""))):

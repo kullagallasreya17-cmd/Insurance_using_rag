@@ -57,6 +57,8 @@ services:
       INDEXING_BACKEND: rq
       CACHE_BACKEND: mongo
       REDIS_URL: redis://redis:6379/0
+    volumes:
+      - backend_documents:/app/documents
     depends_on:
       - redis
     entrypoint: ["/usr/local/bin/rq-worker-entrypoint.sh"]

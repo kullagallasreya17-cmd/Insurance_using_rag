@@ -27,7 +27,16 @@ class RQJobIndexer:
                 result_ttl=0,
                 ttl=86400,
             )
+            queue_length = len(self._queue)
+            logging.info(
+                "RQ enqueue: queue=%s redis_url=%s job_id=%s payload_document_id=%s queue_length=%s",
+                self._queue_name,
+                self._redis_url,
+                job.id,
+                payload.get("document_id"),
+                queue_length,
+            )
             return str(job.id)
-        except Exception as exc:
-            logging.exception("Failed to enqueue RQ job")
+        except Exception:
+            logging.exception("Failed to enqueue RQ job to queue=%s redis_url=%s", self._queue_name, self._redis_url)
             raise

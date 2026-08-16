@@ -74,6 +74,11 @@ function ClaimAnalysis() {
     health_policy: "Health Policy",
     vehicle_policy: "Vehicle Policy",
     life_policy: "Life Policy",
+    home_policy: "Home Policy",
+    travel_policy: "Travel Policy",
+    personal_accident_policy: "Personal Accident Policy",
+    critical_illness_policy: "Critical Illness Policy",
+    property_policy: "Property Policy",
     other: "Others",
   }[policyCategory] || policyCategory;
 
@@ -136,6 +141,11 @@ function ClaimAnalysis() {
                 <option value="health_policy">Health Policy</option>
                 <option value="vehicle_policy">Vehicle Policy</option>
                 <option value="life_policy">Life Policy</option>
+                <option value="home_policy">Home Policy</option>
+                <option value="travel_policy">Travel Policy</option>
+                <option value="personal_accident_policy">Personal Accident Policy</option>
+                <option value="critical_illness_policy">Critical Illness Policy</option>
+                <option value="property_policy">Property Policy</option>
                 <option value="other">Others</option>
               </select>
             </div>
