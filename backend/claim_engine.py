@@ -112,9 +112,9 @@ def estimate_confidence_from_retrieval_scores(scores):
 
     avg_score = sum(safe_scores) / len(safe_scores)
 
-    if avg_score <= 0.2:
+    if avg_score >= 0.45:
         return "high"
-    if avg_score <= 0.7:
+    if avg_score >= 0.25:
         return "medium"
     return "low"
 

@@ -1,0 +1,20 @@
+TEST VEHICLE INSURANCE POLICY
+Policy Number: TEST-2024-001
+Coverage Type: Comprehensive Auto Insurance
+
+COVERAGE DETAILS:
+- Collision Coverage: $500 deductible
+- Comprehensive Coverage: $250 deductible
+- Liability Coverage: 100/300/100
+- Uninsured Motorist Coverage: Yes
+
+POLICY PERIOD:
+Effective Date: 2024-01-01
+Expiration Date: 2025-01-01
+
+EXCLUSIONS:
+- Damage from racing or speed contests
+- Mechanical breakdown
+- Wear and tear
+
+For claims, call: 1-800-CLAIMS-1

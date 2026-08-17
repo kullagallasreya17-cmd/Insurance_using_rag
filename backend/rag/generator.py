@@ -1,8 +1,10 @@
 import os
 
-
 LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "15"))
 LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "0"))
+RAG_SIMILARITY_THRESHOLD = float(os.getenv("RAG_SIMILARITY_THRESHOLD", "0.15"))
+INSUFFICIENT_CONTEXT_ANSWER = "I couldn't find sufficiently relevant information in the uploaded insurance documents."
+SELECTED_DOCUMENT_NOT_FOUND_ANSWER = "I couldn't find this information in the selected insurance document."
 
 
 def _is_quota_error(exc: Exception) -> bool:
@@ -34,12 +36,50 @@ def _format_context(documents):
     return "\n\n".join(context_parts)
 
 
+def _has_explicit_document_context(documents) -> bool:
+    if not documents:
+        return False
+    metadata = [getattr(doc, "metadata", {}) or {} for doc in documents]
+    sources = {item.get("source") for item in metadata if item.get("source")}
+    filenames = {item.get("filename") for item in metadata if item.get("filename")}
+    document_ids = {item.get("document_id") for item in metadata if item.get("document_id") is not None}
+    return len(sources) == 1 or len(filenames) == 1 or len(document_ids) == 1
+
+
+def _validate_verified_context(documents) -> tuple[bool, str | None]:
+    if not documents:
+        return False, INSUFFICIENT_CONTEXT_ANSWER
+
+    categories = set()
+    sources = set()
+    for doc in documents:
+        text = (getattr(doc, "page_content", "") or "").strip()
+        metadata = getattr(doc, "metadata", {}) or {}
+        if not text:
+            return False, SELECTED_DOCUMENT_NOT_FOUND_ANSWER
+
+        score = metadata.get("retrieval_score")
+        if score is not None:
+            try:
+                if float(score) < RAG_SIMILARITY_THRESHOLD:
+                    return False, INSUFFICIENT_CONTEXT_ANSWER
+            except (TypeError, ValueError):
+                return False, INSUFFICIENT_CONTEXT_ANSWER
+
+        if metadata.get("category"):
+            categories.add(metadata.get("category"))
+        if metadata.get("source"):
+            sources.add(metadata.get("source"))
+
+    if len(categories) > 1 and len(sources) <= 1:
+        return False, SELECTED_DOCUMENT_NOT_FOUND_ANSWER
+
+    return True, None
+
+
 def _fallback_answer(question, documents, reason=None):
     if not documents:
-        return (
-            "I couldn't find any indexed insurance document chunks to answer from. "
-            "Please upload and index a policy first."
-        )
+        return INSUFFICIENT_CONTEXT_ANSWER
 
     snippets = []
     seen = set()
@@ -124,8 +164,9 @@ def _invoke_with_retries(llm, prompt: str):
 
 def generate_answer(question, documents):
 
-    if not documents:
-        return _fallback_answer(question, documents)
+    is_valid_context, validation_message = _validate_verified_context(documents)
+    if not is_valid_context:
+        return validation_message or SELECTED_DOCUMENT_NOT_FOUND_ANSWER
 
     if not os.getenv("GOOGLE_API_KEY"):
         return _fallback_answer(question, documents)
@@ -135,17 +176,20 @@ def generate_answer(question, documents):
     context = _format_context(documents)
 
     prompt = f"""
-You are an AI Insurance Assistant.
+You are an insurance document question-answering assistant.
 
-Answer the user's question using only the retrieved insurance document context below.
+Use ONLY the VERIFIED RETRIEVED CONTEXT below.
+The retrieved context has already been filtered to the document requested by the user when a specific document was requested.
 
 Important rules:
-- If the context contains the answer, give a direct, helpful answer.
-- Mention key policy details such as policy name, coverage, premiums, benefits, claim documents, exclusions, or lapse rules when relevant.
-- If the context is related but does not contain a specific detail, say which related details are available.
-- Say "I couldn't find the answer in the insurance documents." only when the retrieved context is empty or clearly unrelated to the question.
+- Never use information from another insurance document.
+- Never use general insurance knowledge to fill missing policy details.
+- Never invent coverage, exclusions, waiting periods, premiums, claim requirements, or policy conditions.
+- If the answer is not explicitly supported by the verified context, say exactly:
+  "I couldn't find this information in the selected insurance document."
+- Always prefer refusing to answer over providing unsupported information.
 
-Retrieved context:
+Verified retrieved context:
 {context}
 
 User question:

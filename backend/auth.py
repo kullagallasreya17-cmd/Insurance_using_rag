@@ -34,7 +34,7 @@ def mark_user_active(user, db):
         {
             "$set": {
                 "username": user["username"],
-                "role": user.get("role", "agent"),
+                "role": user.get("role", "admin"),
                 "last_seen": datetime.utcnow(),
             }
         },

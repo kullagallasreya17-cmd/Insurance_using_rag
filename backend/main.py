@@ -65,45 +65,16 @@ KNOWLEDGE_CATEGORIES = [
     "other",
 ]
 
+SINGLE_ROLE = "admin"
+LEGACY_ROLE_ALIASES = {
+    "admin": "admin",
+    "analyst": "admin",
+    "agent": "admin",
+    "auditor": "admin",
+}
+
 ROLE_CATEGORY_ACCESS = {
-    "admin": None,
-    "analyst": {
-        "health_policy",
-        "vehicle_policy",
-        "life_policy",
-        "home_policy",
-        "travel_policy",
-        "personal_accident_policy",
-        "critical_illness_policy",
-        "property_policy",
-        "claim_procedure",
-        "other",
-    },
-    "agent": {
-        "health_policy",
-        "vehicle_policy",
-        "life_policy",
-        "home_policy",
-        "travel_policy",
-        "personal_accident_policy",
-        "critical_illness_policy",
-        "property_policy",
-        "other",
-    },
-    "auditor": {
-        "health_policy",
-        "vehicle_policy",
-        "life_policy",
-        "home_policy",
-        "travel_policy",
-        "personal_accident_policy",
-        "critical_illness_policy",
-        "property_policy",
-        "claim_procedure",
-        "terms_conditions",
-        "faq",
-        "other",
-    },
+    "admin": set(KNOWLEDGE_CATEGORIES),
 }
 
 ROLE_PERMISSIONS = {
@@ -119,28 +90,6 @@ ROLE_PERMISSIONS = {
         "analytics:read",
         "admin:read",
         "settings:edit",
-    ],
-    "analyst": [
-        "documents:read",
-        "chat:ask",
-        "claims:analyze",
-        "claims:read",
-        "dashboard:read",
-        "analytics:read",
-    ],
-    "agent": [
-        "documents:upload",
-        "documents:read",
-        "chat:ask",
-        "claims:analyze",
-        "dashboard:read",
-    ],
-    "auditor": [
-        "documents:read",
-        "chat:ask",
-        "claims:read",
-        "dashboard:read",
-        "analytics:read",
     ],
 }
 
@@ -228,6 +177,8 @@ def process_indexing_job(job: dict):
                 job.get("document_type", document.get("document_type", "unknown")),
                 job.get("category", document.get("category", "unknown")),
                 job.get("content_type", document.get("content_type", "application/octet-stream")),
+                document_id=document_id,
+                filename=job.get("filename", document.get("filename")),
             )
     except Exception as exc:
         error_message = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
@@ -331,15 +282,16 @@ def enqueue_indexing_job(payload: dict) -> str:
     return job_id
 
 
+def normalize_role(role: str | None) -> str:
+    return LEGACY_ROLE_ALIASES.get((role or "").lower(), SINGLE_ROLE)
+
+
 def get_accessible_categories(role: str | None):
-    if not role:
-        return {"health_policy"}
-    categories = ROLE_CATEGORY_ACCESS.get((role or "").lower())
-    return categories
+    return set(KNOWLEDGE_CATEGORIES) if normalize_role(role) == SINGLE_ROLE else set()
 
 
 def get_role_permissions(role: str | None) -> list[str]:
-    return ROLE_PERMISSIONS.get((role or "").lower(), ["documents:read", "chat:ask"])
+    return ROLE_PERMISSIONS.get(normalize_role(role), ROLE_PERMISSIONS[SINGLE_ROLE])
 
 
 def format_datetime(value):
@@ -396,14 +348,14 @@ def login(request: LoginRequest, db = Depends(get_db)):
     if not user or not verify_password(request.password, user.get("hashed_password", "")):
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
-    token = create_access_token({"sub": user["username"], "role": user.get("role", "agent")})
+    token = create_access_token({"sub": user["username"], "role": normalize_role(user.get("role"))})
     return {
         "access_token": token,
         "token_type": "bearer",
         "user": {
             "username": user["username"],
             "full_name": user.get("full_name"),
-            "role": user.get("role", "agent"),
+            "role": normalize_role(user.get("role")),
         },
     }
 
@@ -419,20 +371,21 @@ def register(request: RegisterRequest, db = Depends(get_db)):
         "id": user_id,
         "username": request.username,
         "full_name": request.full_name,
-        "role": "agent",
+        "role": SINGLE_ROLE,
         "hashed_password": hash_password(request.password),
         "created_at": datetime.utcnow(),
     }
     db.users.insert_one(user)
 
-    token = create_access_token({"sub": user["username"], "role": user["role"]})
+    normalized_role = normalize_role(user["role"])
+    token = create_access_token({"sub": user["username"], "role": normalized_role})
     return {
         "access_token": token,
         "token_type": "bearer",
         "user": {
             "username": user["username"],
             "full_name": user["full_name"],
-            "role": user["role"],
+            "role": normalized_role,
         },
     }
 
@@ -448,7 +401,7 @@ def me(current_user = Depends(get_current_user)):
     return {
         "username": current_user["username"],
         "full_name": current_user.get("full_name"),
-        "role": current_user.get("role", "agent"),
+        "role": normalize_role(current_user.get("role")),
     }
 
 
@@ -481,7 +434,7 @@ def profile(
         "user": {
             "username": current_user["username"],
             "full_name": current_user.get("full_name"),
-            "role": current_user.get("role", "agent"),
+            "role": normalize_role(current_user.get("role")),
             "created_at": format_datetime(current_user.get("created_at")),
         },
         "activity": {
@@ -500,10 +453,8 @@ def profile(
 
 @app.get("/knowledge-categories")
 def knowledge_categories(current_user = Depends(get_current_user)):
-    accessible = get_accessible_categories(current_user.get("role", "agent"))
-    if accessible is None:
-        return {"categories": KNOWLEDGE_CATEGORIES}
-    return {"categories": [category for category in KNOWLEDGE_CATEGORIES if category in accessible]}
+    accessible = get_accessible_categories(current_user.get("role"))
+    return {"categories": sorted(accessible)}
 
 
 @app.get("/documents")
@@ -513,9 +464,9 @@ def list_documents(
     db = Depends(get_db),
     current_user = Depends(get_current_user),
 ):
-    accessible = get_accessible_categories(current_user.get("role", "agent"))
+    accessible = get_accessible_categories(current_user.get("role"))
     query = {}
-    if accessible is not None:
+    if accessible:
         query["category"] = {"$in": list(accessible)}
     total = db.documents.count_documents(query)
     documents = list(db.documents.find(query).sort("created_at", -1).skip(offset).limit(limit))
@@ -1070,6 +1021,8 @@ def reindex_document(
             document.get("document_type"),
             document.get("category"),
             document.get("content_type") or ("application/pdf" if file_path.suffix.lower() == ".pdf" else "application/octet-stream"),
+            document_id=document_id,
+            filename=document.get("filename"),
         )
     db.documents.update_one(
         {"id": document_id},

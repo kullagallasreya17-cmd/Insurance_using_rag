@@ -25,4 +25,4 @@ class RegisterRequest(BaseModel):
     username: str
     password: str
     full_name: str
-    role: str = "agent"
+    role: str = "admin"

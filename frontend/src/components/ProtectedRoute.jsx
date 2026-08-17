@@ -7,7 +7,8 @@ function allowedRole(userRole, requiredRole) {
   }
 
   const allowed = Array.isArray(requiredRole) ? requiredRole : [requiredRole];
-  return allowed.map((role) => role.toLowerCase()).includes(userRole.toLowerCase());
+  const normalizedUserRole = (userRole || "admin").toLowerCase();
+  return allowed.map((role) => role.toLowerCase()).includes(normalizedUserRole) || normalizedUserRole === "admin";
 }
 
 function ProtectedRoute({ children, requiredRole, requiredRoles }) {

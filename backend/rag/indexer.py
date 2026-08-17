@@ -73,6 +73,8 @@ def index_document(
     document_type: str,
     category: str,
     content_type: str,
+    document_id: int | None = None,
+    filename: str | None = None,
 ):
     started_at = __import__("time").perf_counter()
 
@@ -104,9 +106,14 @@ def index_document(
         if not content:
             continue
 
+        original_filename = filename or file_path.name
         page.metadata["document_type"] = document_type
         page.metadata["category"] = category
         page.metadata["source"] = str(file_path)
+        page.metadata["filename"] = original_filename
+        page.metadata["document_name"] = Path(original_filename).stem
+        if document_id is not None:
+            page.metadata["document_id"] = document_id
 
         valid_pages.append(page)
 
@@ -206,13 +213,16 @@ def index_document(
     # ---------------------------------------------------------
     # 7. Check individual chunks for duplicates
     # ---------------------------------------------------------
-    for chunk in chunks:
+    for chunk_index, chunk in enumerate(chunks, start=1):
         content = (
             chunk.page_content or ""
         ).strip()
 
         if not content:
             continue
+
+        chunk.metadata["chunk_id"] = chunk_index
+        chunk.metadata["chunk_count"] = len(chunks)
 
         # Attach file-level fingerprint to metadata
         if sha256_digest:
@@ -221,10 +231,20 @@ def index_document(
             except Exception:
                 pass
 
-        # Check whether this exact chunk already exists
+        duplicate_query = {MONGO_TEXT_KEY: content}
+        if sha256_digest:
+            duplicate_query["sha256"] = sha256_digest
+        elif document_id is not None:
+            duplicate_query["document_id"] = document_id
+        else:
+            duplicate_query["source"] = str(file_path)
+
+        # Check whether this exact chunk already exists for this document.
+        # A global text-only check can skip valid chunks from another upload
+        # and preserve stale category/source metadata.
         try:
             exists = collection.find_one(
-                {MONGO_TEXT_KEY: content}
+                duplicate_query
             )
 
         except Exception as exc:

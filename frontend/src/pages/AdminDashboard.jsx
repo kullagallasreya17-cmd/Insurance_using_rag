@@ -3,10 +3,7 @@ import api from "../api";
 import PortalLayout from "../components/PortalLayout";
 
 const DEFAULT_PERMISSION_MAP = {
-  admin: ["dashboard:read", "users:read", "audit:read", "security:read"],
-  analyst: ["dashboard:read", "claims:read", "documents:read", "chat:ask"],
-  agent: ["documents:read", "chat:ask", "claims:analyze"],
-  auditor: ["dashboard:read", "claims:read", "audit:read", "reports:read"],
+  admin: ["dashboard:read", "users:read", "audit:read", "security:read", "documents:upload", "documents:read", "chat:ask", "claims:analyze", "settings:edit"],
 };
 
 function AdminDashboard() {
@@ -16,9 +13,6 @@ function AdminDashboard() {
 
   const roleClassMap = {
     admin: "role-badge role-admin",
-    analyst: "role-badge role-analyst",
-    agent: "role-badge role-agent",
-    auditor: "role-badge role-auditor",
   };
 
   const openModal = (title, content) => {
@@ -33,7 +27,7 @@ function AdminDashboard() {
     ]);
   };
 
-  const getUserPermissions = (role) => DEFAULT_PERMISSION_MAP[role?.toLowerCase()] || DEFAULT_PERMISSION_MAP.agent;
+  const getUserPermissions = (role) => DEFAULT_PERMISSION_MAP[role?.toLowerCase()] || DEFAULT_PERMISSION_MAP.admin;
 
   useEffect(() => {
     api

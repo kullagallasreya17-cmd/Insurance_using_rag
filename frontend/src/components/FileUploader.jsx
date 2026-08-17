@@ -246,6 +246,23 @@ function FileUploader({ title, endpoint, defaultCategory = "medical_document" })
           currentResults.push(result);
           setUploadResults([...currentResults]);
         } catch (err) {
+          if (err.response?.status === 409) {
+            const existing = err.response.data?.existing_document || {};
+            currentResults.push({
+              document_id: existing.id || null,
+              filename: existing.filename || file.name,
+              category: existing.category || category,
+              status: existing.status || "indexed",
+              pages: 0,
+              chunks: 0,
+              word_count: 0,
+              processing_time_seconds: 0,
+              duplicate: true,
+            });
+            setUploadResults([...currentResults]);
+            continue;
+          }
+
           console.error("Upload failed for a file", err);
           currentResults.push({
             document_id: null,
@@ -301,11 +318,15 @@ function FileUploader({ title, endpoint, defaultCategory = "medical_document" })
 
       const allFinished = finishedResults.length === currentResults.length;
       const anyFailed = finishedResults.some((item) => String(item.status || "").toLowerCase() === "failed");
+      const anyDuplicates = currentResults.some((item) => item.duplicate);
 
       if (allFinished) {
         if (anyFailed) {
           setMessage("One or more files failed to index. Check logs and retry if needed.");
           setMessageType("error");
+        } else if (anyDuplicates) {
+          setMessage("This document was already indexed, so I used the existing indexed copy.");
+          setMessageType("warning");
         } else {
           setMessage("Document uploaded and indexed successfully.");
           setMessageType("success");

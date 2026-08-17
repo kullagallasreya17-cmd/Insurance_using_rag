@@ -2,19 +2,34 @@ from main import get_accessible_categories
 from claim_engine import estimate_confidence_from_retrieval_scores
 
 
-def test_agent_role_has_restricted_document_categories():
+def test_legacy_roles_have_full_admin_document_categories():
     accessible = get_accessible_categories("agent")
     assert "health_policy" in accessible
     assert "vehicle_policy" in accessible
     assert "life_policy" in accessible
     assert "home_policy" in accessible
     assert "travel_policy" in accessible
-    assert "terms_conditions" not in accessible
+    assert "terms_conditions" in accessible
+    assert "other" in accessible
 
 
 def test_admin_role_has_full_document_categories():
     accessible = get_accessible_categories("admin")
-    assert accessible is None
+    assert set(accessible) == set({
+        "health_policy",
+        "vehicle_policy",
+        "life_policy",
+        "home_policy",
+        "travel_policy",
+        "personal_accident_policy",
+        "critical_illness_policy",
+        "property_policy",
+        "claim_procedure",
+        "terms_conditions",
+        "faq",
+        "medical_document",
+        "other",
+    })
 
 
 def test_supported_policy_categories_include_real_insurance_types():

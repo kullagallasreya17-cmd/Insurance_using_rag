@@ -1,8 +1,14 @@
 import re
+import logging
+import os
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from rag.vectorstore import get_mongo_collection, get_mongo_vector_store
 
+
+RAG_SIMILARITY_THRESHOLD = float(os.getenv("RAG_SIMILARITY_THRESHOLD", "0.15"))
+RAG_FETCH_K = int(os.getenv("RAG_FETCH_K", "30"))
 
 POLICY_STOP_WORDS = {
     "backend",
@@ -19,6 +25,38 @@ POLICY_STOP_WORDS = {
     "wording",
     "wordings",
 }
+
+CATEGORY_ALIASES = {
+    "health_policy": ("health policy", "health_policy", "medical policy", "hospitalization policy"),
+    "vehicle_policy": ("vehicle policy", "vehicle_policy", "motor policy", "motor insurance", "car insurance", "auto policy"),
+    "life_policy": ("life policy", "life_policy", "term insurance", "life insurance"),
+    "home_policy": ("home policy", "home_policy", "home insurance"),
+    "travel_policy": ("travel policy", "travel_policy", "travel insurance"),
+    "personal_accident_policy": ("personal accident", "personal_accident_policy"),
+    "critical_illness_policy": ("critical illness", "critical_illness_policy"),
+    "property_policy": ("property policy", "property_policy"),
+    "claim_procedure": ("claim procedure", "claim_procedure"),
+    "terms_conditions": ("terms conditions", "terms_conditions", "terms and conditions"),
+    "faq": ("faq", "insurance faq"),
+}
+
+DOCUMENT_REFERENCE_WORDS = {
+    "document",
+    "file",
+    "pdf",
+    "policy",
+    "summarize",
+    "summary",
+}
+
+
+@dataclass
+class RetrievalPlan:
+    query_filter: dict | None
+    detected_category: str | None = None
+    detected_sources: list[str] | None = None
+    explicit_document: bool = False
+    allow_multiple_documents: bool = False
 
 
 def _normalize_text(value: str) -> str:
@@ -47,8 +85,28 @@ def _distinctive_tokens(value: str) -> list[str]:
     return [
         token
         for token in _normalize_text(value).split()
-        if len(token) > 2 and token not in POLICY_STOP_WORDS
+        if len(token) > 2
+        and token not in POLICY_STOP_WORDS
+        and not re.fullmatch(r"[0-9a-f]{8,}", token)
     ]
+
+
+def _infer_category_from_query(query: str) -> str | None:
+    normalized = _normalize_text(query)
+    for category, aliases in CATEGORY_ALIASES.items():
+        for alias in aliases:
+            alias_normalized = _normalize_text(alias)
+            if alias_normalized and alias_normalized in normalized:
+                return category
+    return None
+
+
+def _is_explicit_document_query(query: str) -> bool:
+    normalized = _normalize_text(query)
+    tokens = set(normalized.split())
+    if tokens.intersection(DOCUMENT_REFERENCE_WORDS):
+        return True
+    return any(_normalize_text(alias) in normalized for aliases in CATEGORY_ALIASES.values() for alias in aliases)
 
 
 def _source_name_parts(value: str) -> set[str]:
@@ -85,6 +143,7 @@ def _policy_variants(value: str) -> set[str]:
         distinctive = _distinctive_tokens(normalized)
         if distinctive:
             variants.add(" ".join(distinctive))
+            variants.update(distinctive)
 
         # Match natural user mentions like "auto secure" from
         # "Auto Secure Policy.pdf" without requiring the file extension/path.
@@ -92,6 +151,17 @@ def _policy_variants(value: str) -> set[str]:
             for start in range(0, len(distinctive) - size + 1):
                 variants.add(" ".join(distinctive[start : start + size]))
 
+    return {variant for variant in variants if variant}
+
+
+def _metadata_variants(metadata: dict) -> set[str]:
+    variants: set[str] = set()
+    for key in ("source", "filename", "document_name", "title"):
+        variants.update(_policy_variants(metadata.get(key)))
+    category = metadata.get("category")
+    if category:
+        variants.add(_normalize_text(category))
+        variants.add(_normalize_text(str(category).replace("_", " ")))
     return {variant for variant in variants if variant}
 
 
@@ -116,39 +186,46 @@ def _matches_policy_variant(query: str, variant: str) -> bool:
 def _find_policy_sources(query: str) -> list[str]:
     query_normalized = _normalize_text(query)
     collection = get_mongo_collection()
-    sources = collection.distinct("source")
-    titles = collection.distinct("title")
+    projection = {
+        "_id": 0,
+        "source": 1,
+        "filename": 1,
+        "document_name": 1,
+        "title": 1,
+        "category": 1,
+        "document_type": 1,
+    }
+    records = list(collection.find({}, projection))
     matches: list[str] = []
 
-    for source in sources:
-        for variant in _policy_variants(source):
+    for record in records:
+        source = record.get("source")
+        if not source:
+            continue
+        for variant in _metadata_variants(record):
             if _matches_policy_variant(query_normalized, variant):
                 matches.append(source)
-                break
-
-    for title in titles:
-        for variant in _policy_variants(title):
-            if _matches_policy_variant(query_normalized, variant):
-                policy_sources = collection.distinct("source", {"title": title})
-                matches.extend(policy_sources)
                 break
 
     return sorted(set(matches))
 
 
-def _build_query_filter(query: str, category: str | None = None) -> dict | None:
+def _build_retrieval_plan(query: str, category: str | None = None) -> RetrievalPlan:
+    allow_multiple = _is_compare_query(query)
+    inferred_category = category or (None if allow_multiple else _infer_category_from_query(query))
+    explicit_document = _is_explicit_document_query(query)
     policy_sources = _find_policy_sources(query)
     query_filter: dict[str, object] = {}
 
-    if category:
-        query_filter["category"] = category
+    if inferred_category:
+        query_filter["category"] = inferred_category
 
     # If a category is provided, prefer sources that belong to that category
     # to avoid returning documents from other policy types (e.g. life vs health).
-    if category and policy_sources:
+    if inferred_category and policy_sources:
         collection = get_mongo_collection()
         try:
-            sources_in_category = set(collection.distinct("source", {"category": category}))
+            sources_in_category = set(collection.distinct("source", {"category": inferred_category}))
             filtered = [s for s in policy_sources if s in sources_in_category]
             if filtered:
                 policy_sources = filtered
@@ -161,60 +238,142 @@ def _build_query_filter(query: str, category: str | None = None) -> dict | None:
             # and rely only on the explicit category filter (already set above).
             policy_sources = []
     if policy_sources:
-        if len(policy_sources) == 1:
-            if _is_compare_query(query):
-                # A compare query referencing one known policy should broaden the search
-                # to all policies rather than restricting to a single source.
-                if _is_policy_query(query):
-                    query_filter["document_type"] = "policy"
-                return query_filter
+        if len(policy_sources) == 1 and not allow_multiple:
             query_filter["source"] = policy_sources[0]
         else:
             query_filter["source"] = {"$in": policy_sources}
-        return query_filter
+        return RetrievalPlan(
+            query_filter=query_filter,
+            detected_category=inferred_category,
+            detected_sources=policy_sources,
+            explicit_document=explicit_document and not allow_multiple,
+            allow_multiple_documents=allow_multiple,
+        )
 
-    if _is_compare_query(query):
+    if allow_multiple:
         if _is_policy_query(query):
             query_filter["document_type"] = "policy"
-            return query_filter
-        return query_filter if query_filter else None
+            return RetrievalPlan(query_filter=query_filter, detected_category=inferred_category, allow_multiple_documents=True)
+        return RetrievalPlan(query_filter=query_filter if query_filter else None, detected_category=inferred_category, allow_multiple_documents=True)
 
     if _is_policy_query(query):
         query_filter["document_type"] = "policy"
-        return query_filter
+        return RetrievalPlan(
+            query_filter=query_filter,
+            detected_category=inferred_category,
+            explicit_document=explicit_document,
+        )
 
-    return query_filter if query_filter else None
+    return RetrievalPlan(
+        query_filter=query_filter if query_filter else None,
+        detected_category=inferred_category,
+        explicit_document=explicit_document,
+    )
 
 
-def retrieve_documents_with_scores(query, category: str | None = None, override_filter: dict | None = None):
+def _build_query_filter(query: str, category: str | None = None) -> dict | None:
+    return _build_retrieval_plan(query, category=category).query_filter
+
+
+def _metadata_matches_plan(metadata: dict, plan: RetrievalPlan) -> bool:
+    if plan.detected_category and metadata.get("category") != plan.detected_category:
+        return False
+
+    sources = plan.detected_sources or []
+    if sources and metadata.get("source") not in sources:
+        return False
+
+    return True
+
+
+def _chunk_dedup_key(doc) -> tuple:
+    meta = doc.metadata or {}
+    return (
+        meta.get("document_id") or meta.get("sha256") or meta.get("source") or meta.get("filename"),
+        meta.get("page_label") or meta.get("page"),
+        meta.get("chunk_id"),
+        (doc.page_content or "")[:120],
+    )
+
+
+def _log_retrieval_debug(question: str, plan: RetrievalPlan, accepted, rejected) -> None:
+    logging.info(
+        "RAG retrieval plan: question=%r detected_category=%s detected_sources=%s "
+        "explicit_document=%s allow_multiple_documents=%s filter=%s threshold=%.4f",
+        question,
+        plan.detected_category,
+        plan.detected_sources or [],
+        plan.explicit_document,
+        plan.allow_multiple_documents,
+        plan.query_filter,
+        RAG_SIMILARITY_THRESHOLD,
+    )
+
+    for label, results in (("accepted", accepted), ("rejected", rejected[:10])):
+        for index, (doc, score, reason) in enumerate(results, start=1):
+            meta = doc.metadata or {}
+            logging.info(
+                "RAG %s chunk %s: source=%s filename=%s category=%s document_type=%s "
+                "page=%s chunk_id=%s score=%.4f reason=%s",
+                label,
+                index,
+                meta.get("source"),
+                meta.get("filename"),
+                meta.get("category"),
+                meta.get("document_type"),
+                meta.get("page_label") or meta.get("page"),
+                meta.get("chunk_id"),
+                float(score),
+                reason,
+            )
+
+
+def retrieve_documents_with_scores(
+    query,
+    category: str | None = None,
+    override_filter: dict | None = None,
+    override_plan: RetrievalPlan | None = None,
+):
     vector_store = get_mongo_vector_store()
-    query_filter = override_filter if override_filter is not None else _build_query_filter(query, category=category)
+    plan = override_plan or _build_retrieval_plan(query, category=category)
+    query_filter = override_filter if override_filter is not None else plan.query_filter
+    if override_filter is not None:
+        plan.query_filter = override_filter
 
-    docs_with_scores = vector_store.similarity_search_with_score(
+    raw_docs_with_scores = vector_store.similarity_search_with_score(
         query,
-        k=20,
+        k=RAG_FETCH_K,
         filter=query_filter,
     )
 
-    # Deduplicate returned chunks/documents by an identifying metadata key such as
-    # `sha256`, `source` or `storage_key`. Keep the highest-scoring chunk per document.
-    seen_keys = {}
-    deduped: list[tuple[object, float]] = []
-    for doc, score in sorted(docs_with_scores, key=lambda item: item[1], reverse=True):
-        meta = doc.metadata or {}
-        dedup_key = meta.get("sha256") or meta.get("source") or meta.get("storage_key") or meta.get("title")
-        if not dedup_key:
-            # fallback to using first 200 chars of text as a key (conservative)
-            dedup_key = (doc.page_content or "")[:200]
+    accepted_with_reason: list[tuple[object, float, str]] = []
+    rejected_with_reason: list[tuple[object, float, str]] = []
+    seen_keys = set()
 
-        if dedup_key in seen_keys:
-            # already have a higher or equal scored chunk for this document
+    for doc, score in sorted(raw_docs_with_scores, key=lambda item: item[1], reverse=True):
+        meta = doc.metadata or {}
+        score = float(score)
+
+        if not _metadata_matches_plan(meta, plan):
+            rejected_with_reason.append((doc, score, "metadata_mismatch"))
             continue
 
-        seen_keys[dedup_key] = score
-        deduped.append((doc, float(score)))
+        if score < RAG_SIMILARITY_THRESHOLD:
+            rejected_with_reason.append((doc, score, "below_similarity_threshold"))
+            continue
 
-    docs_with_scores = deduped[:6]
+        dedup_key = _chunk_dedup_key(doc)
+        if dedup_key in seen_keys:
+            rejected_with_reason.append((doc, score, "duplicate_chunk"))
+            continue
+
+        seen_keys.add(dedup_key)
+        doc.metadata["retrieval_score"] = score
+        accepted_with_reason.append((doc, score, "accepted"))
+
+    accepted_with_reason = accepted_with_reason[:6]
+    _log_retrieval_debug(query, plan, accepted_with_reason, rejected_with_reason)
+    docs_with_scores = [(doc, score) for doc, score, _reason in accepted_with_reason]
 
     print("\n========== Retrieved Chunks ==========")
     if not docs_with_scores:
@@ -223,8 +382,10 @@ def retrieve_documents_with_scores(query, category: str | None = None, override_
     for index, (doc, score) in enumerate(docs_with_scores, start=1):
         preview = " ".join(doc.page_content.split())[:250]
         source = doc.metadata.get("source", "unknown")
+        filename = doc.metadata.get("filename", "unknown")
+        category_value = doc.metadata.get("category", "unknown")
         page = doc.metadata.get("page_label") or doc.metadata.get("page")
-        print(f"{index}. score={score:.4f} page={page} source={source}")
+        print(f"{index}. score={score:.4f} category={category_value} page={page} filename={filename} source={source}")
         print(f"   {preview}")
 
     return docs_with_scores
@@ -235,21 +396,15 @@ def retrieve_documents(query, category: str | None = None):
     parts = _query_transform(query)
 
     # If the original query refers to a specific known source, prefer that filter
-    forced_filter = _build_query_filter(query, category=category)
+    forced_plan = _build_retrieval_plan(query, category=category)
+    forced_filter = forced_plan.query_filter
 
     aggregated: list[tuple[object, float]] = []
     seen_keys = set()
 
     def _add_results(results):
         for d, s in results:
-            meta = d.metadata or {}
-            dedup_key = (
-                meta.get("sha256")
-                or meta.get("source")
-                or meta.get("storage_key")
-                or meta.get("title")
-                or (d.page_content or "")[:200]
-            )
+            dedup_key = _chunk_dedup_key(d)
             if dedup_key in seen_keys:
                 continue
             seen_keys.add(dedup_key)
@@ -259,7 +414,12 @@ def retrieve_documents(query, category: str | None = None):
     for part in parts:
         expansions = _expand_query(part)
         for q in expansions:
-            results = retrieve_documents_with_scores(q, category=category, override_filter=forced_filter)
+            results = retrieve_documents_with_scores(
+                q,
+                category=category,
+                override_filter=forced_filter,
+                override_plan=forced_plan,
+            )
             _add_results(results)
             if len(aggregated) >= 6:
                 break

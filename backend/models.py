@@ -10,7 +10,7 @@ class UserRecord:
     id: int
     username: str
     full_name: str
-    role: str = "agent"
+    role: str = "admin"
     hashed_password: str = ""
     created_at: datetime = field(default_factory=datetime.utcnow)
 

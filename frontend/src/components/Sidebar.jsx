@@ -6,19 +6,19 @@ function Sidebar() {
   const location = useLocation();
   const navigate = useNavigate();
   const user = getUser() || {};
-  const role = (user.role || "agent").toLowerCase();
+  const role = (user.role || "admin").toLowerCase();
 
   const menuItems = [
-    { name: "Dashboard", path: "/dashboard", icon: "DB", roles: ["admin", "analyst", "agent", "auditor"] },
-    { name: "Upload Policy", path: "/upload-policy", icon: "UP", roles: ["admin", "agent"] },
-    { name: "Documents", path: "/documents", icon: "DC", roles: ["admin", "analyst", "agent", "auditor"] },
-    { name: "Policies", path: "/policies", icon: "PL", roles: ["admin", "analyst", "agent", "auditor"] },
-    { name: "AI Chatbot", path: "/chatbot", icon: "AI", roles: ["admin", "analyst", "agent", "auditor"] },
-    { name: "Claim Analysis & Claims", path: "/claim-analysis", icon: "CA", roles: ["admin", "analyst", "agent", "auditor"] },
-    { name: "Analytics", path: "/analytics", icon: "AN", roles: ["admin", "analyst", "auditor"] },
-    { name: "Notifications", path: "/notifications", icon: "NT", roles: ["admin", "analyst", "agent", "auditor"] },
-    { name: "Profile", path: "/profile", icon: "PR", roles: ["admin", "analyst", "agent", "auditor"] },
-    { name: "Settings", path: "/settings", icon: "ST", roles: ["admin", "analyst", "agent", "auditor"] },
+    { name: "Dashboard", path: "/dashboard", icon: "DB", roles: ["admin"] },
+    { name: "Upload Policy", path: "/upload-policy", icon: "UP", roles: ["admin"] },
+    { name: "Documents", path: "/documents", icon: "DC", roles: ["admin"] },
+    { name: "Policies", path: "/policies", icon: "PL", roles: ["admin"] },
+    { name: "AI Chatbot", path: "/chatbot", icon: "AI", roles: ["admin"] },
+    { name: "Claim Analysis & Claims", path: "/claim-analysis", icon: "CA", roles: ["admin"] },
+    { name: "Analytics", path: "/analytics", icon: "AN", roles: ["admin"] },
+    { name: "Notifications", path: "/notifications", icon: "NT", roles: ["admin"] },
+    { name: "Profile", path: "/profile", icon: "PR", roles: ["admin"] },
+    { name: "Settings", path: "/settings", icon: "ST", roles: ["admin"] },
     { name: "Admin", path: "/admin", icon: "AD", roles: ["admin"] },
   ];
 
