@@ -22,6 +22,7 @@ class ClaimRequest(BaseModel):
 class LoginRequest(BaseModel):
     username: str
     password: str
+    role: str = "customer"
 
 
 class RegisterRequest(BaseModel):

@@ -8,6 +8,7 @@ function Login() {
   const navigate = useNavigate();
   const [usernameOrEmail, setUsernameOrEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [selectedRole, setSelectedRole] = useState("customer");
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [message, setMessage] = useState("");
@@ -28,6 +29,7 @@ function Login() {
       const response = await api.post("/auth/login", {
         username: usernameOrEmail,
         password,
+        role: selectedRole,
       });
       setSession(response.data.access_token, response.data.user, rememberMe);
       const role = response.data.user?.role?.toLowerCase();
@@ -79,6 +81,17 @@ function Login() {
               {showPassword ? "Hide" : "Show"}
             </button>
           </div>
+        </label>
+
+        <label>
+          Role
+          <select value={selectedRole} onChange={(event) => setSelectedRole(event.target.value)}>
+            <option value="customer">Customer</option>
+            <option value="agent">Agent</option>
+            <option value="analyst">Analyst</option>
+            <option value="admin">Admin</option>
+            <option value="auditor">Auditor</option>
+          </select>
         </label>
 
         <div className="form-row">

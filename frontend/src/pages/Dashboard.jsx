@@ -403,9 +403,9 @@ function Dashboard() {
               </div>
               <div className="action-grid">
                 <Link to="/upload-policy" className="action-btn">+ Upload Policy</Link>
-                <Link to="/upload-reports" className="action-btn">+ Upload Report</Link>
                 <Link to="/claim-analysis" className="action-btn">+ New Claim</Link>
                 <Link to="/chatbot" className="action-btn">+ Open Chatbot</Link>
+                <Link to="/documents" className="action-btn">+ View Documents</Link>
               </div>
             </div>
           </div>

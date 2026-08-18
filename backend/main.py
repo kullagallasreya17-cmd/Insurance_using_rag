@@ -588,8 +588,15 @@ def health():
 
 @app.post("/auth/login")
 def login(request: LoginRequest, db = Depends(get_db)):
+    requested_role = normalize_role(request.role)
     user = db.users.find_one({"username": request.username})
-    if not user or not verify_password(request.password, user.get("hashed_password", "")):
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    if requested_role and normalize_role(user.get("role")) != requested_role:
+        raise HTTPException(status_code=403, detail=f"This account is not registered as a {requested_role}.")
+
+    if not verify_password(request.password, user.get("hashed_password", "")):
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
     token = create_access_token({"sub": user["username"], "role": normalize_role(user.get("role"))})

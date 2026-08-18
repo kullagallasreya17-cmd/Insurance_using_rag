@@ -16,7 +16,6 @@ import Profile from "./pages/Profile";
 import Register from "./pages/Register";
 import Settings from "./pages/Settings";
 import UploadPolicy from "./pages/UploadPolicy";
-import UploadReports from "./pages/UploadReports";
 
 import "./App.css";
 
@@ -28,8 +27,7 @@ function App() {
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
         <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-        <Route path="/upload-policy" element={<ProtectedRoute requiredRoles={["admin", "customer"]}><UploadPolicy /></ProtectedRoute>} />
-        <Route path="/upload-reports" element={<ProtectedRoute requiredRoles={["admin", "customer"]}><UploadReports /></ProtectedRoute>} />
+        <Route path="/upload-policy" element={<ProtectedRoute requiredRoles={["admin", "customer", "agent", "analyst"]}><UploadPolicy /></ProtectedRoute>} />
         <Route path="/documents" element={<ProtectedRoute><Documents /></ProtectedRoute>} />
         <Route path="/policies" element={<ProtectedRoute><Policies /></ProtectedRoute>} />
         <Route path="/claim-analysis" element={<ProtectedRoute requiredRoles={["admin", "customer"]}><ClaimAnalysis /></ProtectedRoute>} />

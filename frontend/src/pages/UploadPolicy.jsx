@@ -73,11 +73,11 @@ function UploadPolicy() {
 
         <div className="upload-policy-content">
 
-          <h1>📄 Upload Policy or Report</h1>
+          <h1>📄 Upload Policy Documents</h1>
 
           <p>
-            Upload policy or report documents (PDF) to build the knowledge base for the RAG system.
-            You can upload multiple documents and select a category below (including "Others").
+            Upload one or more policy documents (PDF) to build the knowledge base for the RAG system.
+            This page supports multi-document uploads and lets you assign the correct category before indexing.
           </p>
 
           <div className="info-cards">
@@ -102,7 +102,7 @@ function UploadPolicy() {
           {/* Category quick-buttons removed per request; selection is available in the dropdown below. */}
 
           <FileUploader
-            title="Upload Policy or Report"
+            title="Upload Policy Documents"
             endpoint="upload-policy"
             defaultCategory={selectedCategory}
           />

@@ -40,7 +40,8 @@
   font-size: 14px;
 }
 
-.login-panel input {
+.login-panel input,
+.login-panel select {
   border: 1px solid #cbd5e1;
   border-radius: 10px;
   padding: 14px 16px;

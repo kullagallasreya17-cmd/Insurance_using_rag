@@ -11,6 +11,7 @@ function Register() {
     username: "",
     password: "",
     confirm_password: "",
+    role: "customer",
   });
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
@@ -45,6 +46,7 @@ function Register() {
         full_name: form.full_name,
         username: form.username,
         password: form.password,
+        role: form.role,
       });
       setSession(response.data.access_token, response.data.user);
       navigate("/dashboard");
@@ -91,6 +93,17 @@ function Register() {
             onChange={(event) => updateForm("password", event.target.value)}
             placeholder="Create a password"
           />
+        </label>
+
+        <label>
+          Role
+          <select value={form.role} onChange={(event) => updateForm("role", event.target.value)}>
+            <option value="customer">Customer</option>
+            <option value="agent">Agent</option>
+            <option value="analyst">Analyst</option>
+            <option value="admin">Admin</option>
+            <option value="auditor">Auditor</option>
+          </select>
         </label>
 
         <label>
