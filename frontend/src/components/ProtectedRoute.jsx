@@ -7,7 +7,7 @@ function allowedRole(userRole, requiredRole) {
   }
 
   const allowed = Array.isArray(requiredRole) ? requiredRole : [requiredRole];
-  const normalizedUserRole = (userRole || "admin").toLowerCase();
+  const normalizedUserRole = (userRole || "customer").toLowerCase();
   return allowed.map((role) => role.toLowerCase()).includes(normalizedUserRole) || normalizedUserRole === "admin";
 }
 

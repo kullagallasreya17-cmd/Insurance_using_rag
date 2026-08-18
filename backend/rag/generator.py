@@ -5,6 +5,7 @@ LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "0"))
 RAG_SIMILARITY_THRESHOLD = float(os.getenv("RAG_SIMILARITY_THRESHOLD", "0.15"))
 INSUFFICIENT_CONTEXT_ANSWER = "I couldn't find sufficiently relevant information in the uploaded insurance documents."
 SELECTED_DOCUMENT_NOT_FOUND_ANSWER = "I couldn't find this information in the selected insurance document."
+MULTI_DOCUMENT_NOT_FOUND_ANSWER = "I couldn't find this information across the retrieved insurance documents."
 
 
 def _is_quota_error(exc: Exception) -> bool:
@@ -27,9 +28,10 @@ def _format_context(documents):
         page = doc.metadata.get("page_label") or doc.metadata.get("page", "unknown")
         category = doc.metadata.get("category", "general")
         document_type = doc.metadata.get("document_type", "document")
+        evidence_role = doc.metadata.get("evidence_role", "context")
 
         context_parts.append(
-            f"[Chunk {index} | type: {document_type} | category: {category} | "
+            f"[Chunk {index} | role: {evidence_role} | type: {document_type} | category: {category} | "
             f"page: {page} | source: {source}]\n{doc.page_content}"
         )
 
@@ -44,6 +46,18 @@ def _has_explicit_document_context(documents) -> bool:
     filenames = {item.get("filename") for item in metadata if item.get("filename")}
     document_ids = {item.get("document_id") for item in metadata if item.get("document_id") is not None}
     return len(sources) == 1 or len(filenames) == 1 or len(document_ids) == 1
+
+
+def _is_multi_document_context(documents) -> bool:
+    if not documents:
+        return False
+    metadata = [getattr(doc, "metadata", {}) or {} for doc in documents]
+    document_keys = {
+        item.get("document_id") or item.get("source") or item.get("filename")
+        for item in metadata
+        if item.get("document_id") is not None or item.get("source") or item.get("filename")
+    }
+    return len(document_keys) > 1
 
 
 def _validate_verified_context(documents) -> tuple[bool, str | None]:
@@ -175,6 +189,15 @@ def generate_answer(question, documents):
 
     context = _format_context(documents)
 
+    not_found_answer = MULTI_DOCUMENT_NOT_FOUND_ANSWER if _is_multi_document_context(documents) else SELECTED_DOCUMENT_NOT_FOUND_ANSWER
+    comparison_instruction = (
+        "If multiple documents are retrieved, compare them document by document. "
+        "For superlative questions such as highest coverage, identify the relevant value from each retrieved policy when present, then name the highest. "
+        "If a value is missing for any policy, say which policy is missing that value."
+        if _is_multi_document_context(documents)
+        else "Answer only for the selected/retrieved document."
+    )
+
     prompt = f"""
 You are an insurance document question-answering assistant.
 
@@ -182,12 +205,14 @@ Use ONLY the VERIFIED RETRIEVED CONTEXT below.
 The retrieved context has already been filtered to the document requested by the user when a specific document was requested.
 
 Important rules:
-- Never use information from another insurance document.
+- For single-document questions, never use information from another insurance document.
+- For multi-document comparison questions, use only the retrieved documents and keep each policy's facts separate.
 - Never use general insurance knowledge to fill missing policy details.
 - Never invent coverage, exclusions, waiting periods, premiums, claim requirements, or policy conditions.
 - If the answer is not explicitly supported by the verified context, say exactly:
-  "I couldn't find this information in the selected insurance document."
+  "{not_found_answer}"
 - Always prefer refusing to answer over providing unsupported information.
+- {comparison_instruction}
 
 Verified retrieved context:
 {context}
@@ -206,6 +231,21 @@ Answer:
 
 
 def generate_claim_analysis(question, documents, claim_amount=None, policy_category=None, admission_date=None):
+    is_valid_context, validation_message = _validate_verified_context(documents)
+    if not is_valid_context:
+        return """{
+  "decision": "needs_review",
+  "confidence": "low",
+  "rationale": "%s",
+  "covered_items": [],
+  "exclusions": [],
+  "policy_start_date": null,
+  "admission_date": null,
+  "waiting_period_months": null,
+  "missing_information": ["Policy evidence"],
+  "next_steps": ["Upload or select the relevant policy document and supporting claim documents"]
+}""" % (validation_message or "Insufficient verified policy context was retrieved for this claim.")
+
     if not os.getenv("GOOGLE_API_KEY"):
         return """{
   "decision": "needs_review",
@@ -227,7 +267,7 @@ def generate_claim_analysis(question, documents, claim_amount=None, policy_categ
     prompt = f"""
 You are an enterprise insurance claim analysis engine.
 
-Use only the retrieved policy and medical context provided below. Do not invent benefits or exclusions.
+Use only the retrieved policy and claim evidence context provided below. Do not invent benefits, exclusions, dates, bills, diagnoses, or claim requirements.
 Return valid JSON only, with no markdown fences and no explanatory text. Use exactly these keys:
 {
   "decision": "approved" | "rejected" | "needs_review",
@@ -243,13 +283,16 @@ Return valid JSON only, with no markdown fences and no explanatory text. Use exa
 }
 
 Rules:
+- Treat chunks with role=policy as the source of truth for coverage, exclusions, limits, waiting periods, and required documents.
+- Treat chunks with role=claim as supporting evidence only. Claim evidence cannot create coverage that the policy evidence does not state.
 - If the context clearly shows the claim is covered, return approved.
 - If the context clearly shows a policy exclusion or non-coverage, return rejected.
 - If the evidence is incomplete or the question is ambiguous, return needs_review.
 - Prefer needs_review when you are not fully sure.
 - Keep rationale short and factual.
-- If no relevant policy context is available, return needs_review with a clear reason.
+- If no relevant policy context is available, return needs_review with a clear reason and add "Policy document evidence" to missing_information.
 - If retrieved documents disagree or specific page-level details are missing, note this explicitly in the rationale and missing_information.
+- Include missing claim documents in missing_information when policy requirements are not satisfied by the provided claim evidence.
 
 Claim amount: {claim_amount}
 Policy category: {policy_category}

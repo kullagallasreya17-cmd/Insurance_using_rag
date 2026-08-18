@@ -3,8 +3,8 @@ import re
 from datetime import datetime
 from typing import Optional
 
-from agents.retriever_agent import RetrievalAgent
 from rag.generator import generate_claim_analysis
+from rag.retriever import RetrievalPlan, retrieve_documents_with_scores_expanded
 
 
 def _parse_number(value) -> Optional[float]:
@@ -39,20 +39,34 @@ def build_document_citations(documents):
         citations.append(
             {
                 "source": metadata.get("source", "unknown"),
+                "filename": metadata.get("filename"),
+                "document_name": metadata.get("document_name") or metadata.get("title"),
                 "category": metadata.get("category", "general"),
                 "document_type": metadata.get("document_type", "unknown"),
+                "evidence_role": metadata.get("evidence_role", "context"),
+                "document_id": metadata.get("document_id"),
+                "chunk_id": metadata.get("chunk_id"),
+                "retrieval_score": metadata.get("retrieval_score"),
+                "rerank_score": metadata.get("rerank_score"),
                 "page": metadata.get("page_label") or metadata.get("page", "unknown"),
                 "excerpt": excerpt,
             }
         )
 
     # Deduplicate citations while preserving first-occurrence order.
-    # Use (source, page) as a stable key so identical document/page pairs
-    # are shown only once even if multiple chunks were retrieved.
+    # Use the strongest available document identity so multi-policy answers do
+    # not collapse citations when source/page fields are missing or generic.
     seen = set()
     unique_citations = []
     for c in citations:
-        key = (c.get("source"), c.get("page"))
+        document_key = (
+            c.get("document_id")
+            or c.get("source")
+            or c.get("filename")
+            or c.get("document_name")
+            or c.get("excerpt")
+        )
+        key = (document_key, c.get("page"), c.get("chunk_id"))
         if key not in seen:
             seen.add(key)
             unique_citations.append(c)
@@ -110,6 +124,19 @@ def estimate_confidence_from_retrieval_scores(scores):
     if not safe_scores:
         return "low"
 
+    # Older vector stores may return distance where lower is better, while
+    # Atlas/cosine paths return similarity where higher is better. Normalize
+    # obvious distance-shaped values into a comparable confidence signal.
+    if all(0.0 <= score <= 0.25 for score in safe_scores):
+        return "high"
+    if any(score > 1.0 for score in safe_scores):
+        avg_distance = sum(safe_scores) / len(safe_scores)
+        if avg_distance <= 0.25:
+            return "high"
+        if avg_distance <= 0.75:
+            return "medium"
+        return "low"
+
     avg_score = sum(safe_scores) / len(safe_scores)
 
     if avg_score >= 0.45:
@@ -119,10 +146,231 @@ def estimate_confidence_from_retrieval_scores(scores):
     return "low"
 
 
-def analyze_claim(question: str, claim_amount: float | None = None, policy_category: str | None = None):
-    retriever = RetrievalAgent()
-    documents = retriever.retrieve(question, category=policy_category)
-    retrieval_results = retriever.retrieve_with_scores(question, category=policy_category)
+CLAIM_DOCUMENT_RULES = {
+    "health_policy": [
+        ("policy", "Active policy document"),
+        ("medical_report", "Doctor consultation or diagnosis report"),
+        ("hospital_bill", "Hospital bill or invoice"),
+        ("prescription", "Prescription or treatment advice"),
+        ("lab_report", "Lab or investigation reports, if applicable"),
+    ],
+    "vehicle_policy": [
+        ("policy", "Active vehicle policy document"),
+        ("hospital_bill", "Repair bill or estimate"),
+        ("medical_report", "Accident or damage report"),
+    ],
+    "life_policy": [
+        ("policy", "Active life policy document"),
+        ("medical_report", "Medical or death certificate evidence"),
+    ],
+    "default": [
+        ("policy", "Relevant policy document"),
+        ("medical_report", "Supporting claim report"),
+        ("hospital_bill", "Claim bill or invoice"),
+    ],
+}
+
+
+def build_claim_document_checklist(
+    documents,
+    policy_category: str | None = None,
+    uploaded_document_types: list[str] | None = None,
+):
+    required = CLAIM_DOCUMENT_RULES.get(policy_category or "", CLAIM_DOCUMENT_RULES["default"])
+    present_types = set(uploaded_document_types or [])
+    for doc in documents or []:
+        metadata = getattr(doc, "metadata", {}) or {}
+        document_type = metadata.get("document_type")
+        if document_type:
+            present_types.add(document_type)
+        if metadata.get("evidence_role") == "policy":
+            present_types.add("policy")
+
+    items = []
+    for document_type, label in required:
+        present = document_type in present_types
+        items.append(
+            {
+                "document_type": document_type,
+                "label": label,
+                "present": present,
+            }
+        )
+
+    missing = [item["label"] for item in items if not item["present"]]
+    return {
+        "required": items,
+        "missing_documents": missing,
+        "complete": not missing,
+    }
+
+
+def evaluate_rag_grounding(parsed: dict, documents, retrieval_scores: list[float]):
+    confidence = estimate_confidence_from_retrieval_scores(retrieval_scores)
+    has_sources = bool(documents)
+    has_policy_source = False
+    has_claim_source = False
+    supported_terms = set()
+    context = " ".join((getattr(doc, "page_content", "") or "").lower() for doc in documents or [])
+    answer_text = " ".join(
+        str(parsed.get(field, ""))
+        for field in ("decision", "rationale", "evidence_summary")
+    ).lower()
+    for field in ("covered_items", "exclusions"):
+        for item in parsed.get(field, []) or []:
+            item_text = str(item).lower().strip()
+            if item_text and item_text in context:
+                supported_terms.add(item_text)
+            if item_text and item_text in answer_text and item_text not in context:
+                supported_terms.discard(item_text)
+
+    for doc in documents or []:
+        metadata = getattr(doc, "metadata", {}) or {}
+        if metadata.get("evidence_role") == "policy" or metadata.get("document_type") == "policy":
+            has_policy_source = True
+        elif metadata.get("evidence_role") == "claim":
+            has_claim_source = True
+
+    warnings = []
+    if not has_sources:
+        warnings.append("No retrieved policy evidence was available.")
+    if not has_policy_source:
+        warnings.append("No policy document evidence was retrieved for this claim.")
+    if confidence == "low":
+        warnings.append("Retrieved evidence was low confidence.")
+    if (parsed.get("decision") == "approved" and not supported_terms and has_sources):
+        warnings.append("Approval was not backed by explicit covered item or exclusion evidence.")
+
+    return {
+        "confidence": confidence,
+        "source_count": len(documents or []),
+        "policy_source_count": sum(
+            1
+            for doc in documents or []
+            if (getattr(doc, "metadata", {}) or {}).get("evidence_role") == "policy"
+            or (getattr(doc, "metadata", {}) or {}).get("document_type") == "policy"
+        ),
+        "claim_source_count": sum(
+            1
+            for doc in documents or []
+            if (getattr(doc, "metadata", {}) or {}).get("evidence_role") == "claim"
+        ),
+        "has_claim_evidence": has_claim_source,
+        "supported_terms": sorted(supported_terms),
+        "warnings": warnings,
+        "grounded": has_sources and has_policy_source and confidence != "low" and not warnings,
+    }
+
+
+def _ensure_list(value):
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    return [value]
+
+
+def _retrieve_claim_context(
+    question: str,
+    policy_category: str | None = None,
+    policy_document_id: int | None = None,
+    claim_document_ids: list[int] | None = None,
+):
+    if policy_document_id is None and not claim_document_ids:
+        if policy_category:
+            policy_filter = {"document_type": "policy", "category": policy_category}
+            policy_plan = RetrievalPlan(query_filter=policy_filter)
+            retrieval_results = retrieve_documents_with_scores_expanded(
+                _build_policy_retrieval_query(question),
+                override_filter=policy_filter,
+                override_plan=policy_plan,
+            )
+            for doc, _score in retrieval_results:
+                doc.metadata["evidence_role"] = "policy"
+        else:
+            retrieval_results = retrieve_documents_with_scores_expanded(question)
+        return [doc for doc, _score in retrieval_results], retrieval_results
+
+    results: list[tuple[object, float]] = []
+    if policy_document_id is not None or policy_category:
+        policy_filter = {"document_type": "policy"}
+        if policy_document_id is not None:
+            policy_filter["document_id"] = policy_document_id
+        if policy_category:
+            policy_filter["category"] = policy_category
+        policy_plan = RetrievalPlan(query_filter=policy_filter)
+        policy_results = retrieve_documents_with_scores_expanded(
+            _build_policy_retrieval_query(question),
+            override_filter=policy_filter,
+            override_plan=policy_plan,
+        )
+        for doc, _score in policy_results:
+            doc.metadata["evidence_role"] = "policy"
+        results.extend(policy_results)
+
+    if claim_document_ids:
+        claim_filter = {"document_id": {"$in": claim_document_ids}}
+        claim_plan = RetrievalPlan(query_filter=claim_filter)
+        claim_results = retrieve_documents_with_scores_expanded(
+            _build_claim_evidence_query(question),
+            override_filter=claim_filter,
+            override_plan=claim_plan,
+        )
+        for doc, _score in claim_results:
+            doc.metadata["evidence_role"] = "claim"
+        results.extend(claim_results)
+
+    seen = set()
+    unique_results = []
+    for doc, score in results:
+        metadata = getattr(doc, "metadata", {}) or {}
+        key = (
+            metadata.get("document_id"),
+            metadata.get("source"),
+            metadata.get("page"),
+            metadata.get("chunk_id"),
+            (getattr(doc, "page_content", "") or "")[:80],
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_results.append((doc, score))
+
+    return [doc for doc, _score in unique_results], unique_results
+
+
+def _build_policy_retrieval_query(question: str) -> str:
+    return (
+        f"{question} policy coverage exclusions eligibility waiting period "
+        "sum insured deductible co payment claim required documents"
+    )
+
+
+def _build_claim_evidence_query(question: str) -> str:
+    return (
+        f"{question} diagnosis treatment hospital bill prescription lab report "
+        "discharge summary invoice admission date"
+    )
+
+
+def analyze_claim(
+    question: str,
+    claim_amount: float | None = None,
+    policy_category: str | None = None,
+    policy_document_id: int | None = None,
+    claim_document_ids: list[int] | None = None,
+    uploaded_document_types: list[str] | None = None,
+):
+    documents, retrieval_results = _retrieve_claim_context(
+        question,
+        policy_category=policy_category,
+        policy_document_id=policy_document_id,
+        claim_document_ids=claim_document_ids,
+    )
     retrieval_scores = [score for _doc, score in retrieval_results]
     # If the client provided an admission_date in the question text (or structured input),
     # the generator can include it in the analysis. For now we attempt to extract an ISO date token.
@@ -153,6 +401,20 @@ def analyze_claim(question: str, claim_amount: float | None = None, policy_categ
     parsed.setdefault("exclusions", [])
     parsed.setdefault("missing_information", [])
     parsed.setdefault("next_steps", [])
+    parsed["covered_items"] = _ensure_list(parsed.get("covered_items"))
+    parsed["exclusions"] = _ensure_list(parsed.get("exclusions"))
+    parsed["missing_information"] = _ensure_list(parsed.get("missing_information"))
+    parsed["next_steps"] = _ensure_list(parsed.get("next_steps"))
+
+    checklist = build_claim_document_checklist(
+        documents,
+        policy_category=policy_category,
+        uploaded_document_types=uploaded_document_types,
+    )
+    parsed["document_checklist"] = checklist
+    for missing_document in checklist["missing_documents"]:
+        if missing_document not in parsed["missing_information"]:
+            parsed["missing_information"].append(missing_document)
 
     # Ensure dates and waiting-period info exist as keys
     policy_start = parsed.get("policy_start_date")
@@ -230,9 +492,16 @@ def analyze_claim(question: str, claim_amount: float | None = None, policy_categ
 
     confidence = estimate_confidence_from_retrieval_scores(retrieval_scores)
     parsed["confidence"] = confidence
+    rag_evaluation = evaluate_rag_grounding(parsed, documents, retrieval_scores)
+    parsed["rag_evaluation"] = rag_evaluation
 
     if parsed.get("decision") not in {"approved", "rejected", "needs_review"}:
         parsed["decision"] = "needs_review"
+    if not rag_evaluation["grounded"] and parsed.get("decision") == "approved":
+        parsed["decision"] = "needs_review"
+        parsed.setdefault("next_steps", []).append(
+            "Manual review required because the approval is not sufficiently grounded in retrieved policy evidence."
+        )
 
     parsed["sources"] = build_document_citations(documents)
     parsed["citations"] = parsed["sources"]

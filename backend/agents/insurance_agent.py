@@ -82,8 +82,12 @@ class InsuranceAgent:
             "sources": [
                 {
                     "source": item["source"],
+                    "filename": item.get("filename"),
+                    "document_name": item.get("document_name"),
+                    "document_id": item.get("document_id"),
                     "category": item["category"],
                     "document_type": item["document_type"],
+                    "evidence_role": item.get("evidence_role"),
                     "page": item["page"],
                     "excerpt": item["excerpt"],
                 }

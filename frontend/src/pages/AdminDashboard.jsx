@@ -3,7 +3,9 @@ import api from "../api";
 import PortalLayout from "../components/PortalLayout";
 
 const DEFAULT_PERMISSION_MAP = {
-  admin: ["dashboard:read", "users:read", "audit:read", "security:read", "documents:upload", "documents:read", "chat:ask", "claims:analyze", "settings:edit"],
+  admin: ["dashboard:read", "admin:read", "audit:read", "monitoring:read", "users:manage", "documents:upload", "documents:read", "documents:delete", "documents:reindex", "chat:ask", "claims:analyze", "claims:read", "analytics:read", "settings:edit"],
+  customer: ["dashboard:read", "documents:upload", "documents:read", "chat:ask", "claims:analyze", "claims:read"],
+  auditor: ["dashboard:read", "documents:read", "claims:read", "analytics:read", "audit:read", "monitoring:read"],
 };
 
 function AdminDashboard() {
@@ -13,6 +15,8 @@ function AdminDashboard() {
 
   const roleClassMap = {
     admin: "role-badge role-admin",
+    auditor: "role-badge role-auditor",
+    customer: "role-badge role-customer",
   };
 
   const openModal = (title, content) => {
@@ -41,6 +45,27 @@ function AdminDashboard() {
       {message && <div className="enterprise-card info-banner">{message}</div>}
       {overview && (
         <>
+          {overview.monitoring && (
+            <div className="enterprise-grid">
+              {[
+                ["Documents Indexed", overview.monitoring.documents_indexed],
+                ["Failed Documents", overview.monitoring.failed_documents],
+                ["RAG Queries", overview.monitoring.rag_queries],
+                ["API Errors", overview.monitoring.api_errors],
+                ["Queue Jobs", overview.monitoring.queue_jobs ?? "N/A"],
+                ["Avg RAG Latency", `${Math.round(overview.monitoring.latency?.rag_query?.avg_duration_ms || 0)} ms`],
+              ].map(([label, value]) => (
+                <article className="enterprise-card service-card" key={label}>
+                  <div className="service-card-header">
+                    <h3>{label}</h3>
+                    <span className="service-dot online" />
+                  </div>
+                  <p>{value}</p>
+                </article>
+              ))}
+            </div>
+          )}
+
           <div className="enterprise-grid">
             {overview.service_health.map((service) => (
               <article className="enterprise-card service-card" key={service.service}>
@@ -102,54 +127,56 @@ function AdminDashboard() {
             </table>
           </div>
 
-          <table className="enterprise-table" style={{ marginTop: "24px" }}>
-            <thead>
-              <tr>
-                <th>User</th>
-                <th>Full Name</th>
-                <th>Role</th>
-                <th>Created</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {overview.users.map((user) => (
-                <tr key={user.id}>
-                  <td>{user.username}</td>
-                  <td>{user.full_name}</td>
-                  <td>
-                    <span className={roleClassMap[user.role?.toLowerCase()] || "role-badge role-agent"}>
-                      {user.role}
-                    </span>
-                  </td>
-                  <td>{new Date(user.created_at).toLocaleString()}</td>
-                  <td>
-                    <div className="table-actions">
-                      <button
-                        type="button"
-                        className="table-action-button"
-                        onClick={() => openModal(`${user.full_name} profile`, [
-                          `Username: ${user.username}`,
-                          `Role: ${user.role}`,
-                          `Created: ${new Date(user.created_at).toLocaleString()}`,
-                          "Status: active",
-                        ])}
-                      >
-                        View profile
-                      </button>
-                      <button
-                        type="button"
-                        className="table-action-button secondary"
-                        onClick={() => openModal(`${user.full_name} permissions`, getUserPermissions(user.role))}
-                      >
-                        Permissions
-                      </button>
-                    </div>
-                  </td>
+          {overview.can_manage_users && (
+            <table className="enterprise-table" style={{ marginTop: "24px" }}>
+              <thead>
+                <tr>
+                  <th>User</th>
+                  <th>Full Name</th>
+                  <th>Role</th>
+                  <th>Created</th>
+                  <th>Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {overview.users.map((user) => (
+                  <tr key={user.id}>
+                    <td>{user.username}</td>
+                    <td>{user.full_name}</td>
+                    <td>
+                      <span className={roleClassMap[user.role?.toLowerCase()] || "role-badge role-agent"}>
+                        {user.role}
+                      </span>
+                    </td>
+                    <td>{new Date(user.created_at).toLocaleString()}</td>
+                    <td>
+                      <div className="table-actions">
+                        <button
+                          type="button"
+                          className="table-action-button"
+                          onClick={() => openModal(`${user.full_name} profile`, [
+                            `Username: ${user.username}`,
+                            `Role: ${user.role}`,
+                            `Created: ${new Date(user.created_at).toLocaleString()}`,
+                            "Status: active",
+                          ])}
+                        >
+                          View profile
+                        </button>
+                        <button
+                          type="button"
+                          className="table-action-button secondary"
+                          onClick={() => openModal(`${user.full_name} permissions`, getUserPermissions(user.role))}
+                        >
+                          Permissions
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </>
       )}
 

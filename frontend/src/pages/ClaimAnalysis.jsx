@@ -1,17 +1,23 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import api from "../api";
+import { getUser } from "../auth";
 import Navbar from "../components/Navbar";
 import Sidebar from "../components/Sidebar";
 import "./ClaimAnalysis.css";
 
 function ClaimAnalysis() {
+  const user = getUser() || {};
+  const role = (user.role || "customer").toLowerCase();
+  const canAnalyzeClaims = ["admin", "customer"].includes(role);
   const [question, setQuestion] = useState("");
   const [diagnosis, setDiagnosis] = useState("");
   const [hospitalName, setHospitalName] = useState("");
   const [claimAmount, setClaimAmount] = useState("");
   const [policyCategory, setPolicyCategory] = useState("health_policy");
-  const [selectedReport, setSelectedReport] = useState("");
+  const [documents, setDocuments] = useState([]);
+  const [selectedPolicyId, setSelectedPolicyId] = useState("");
+  const [selectedClaimDocumentIds, setSelectedClaimDocumentIds] = useState([]);
   const [validationMessage, setValidationMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
@@ -28,12 +34,31 @@ function ClaimAnalysis() {
 
   useEffect(() => {
     fetchClaims();
-  }, []);
+    if (canAnalyzeClaims) {
+      api
+        .get("/documents", { params: { limit: 200 } })
+        .then((response) => setDocuments(response.data.documents || []))
+        .catch((error) => console.error("Failed to load documents", error));
+    }
+  }, [canAnalyzeClaims]);
 
-  const normalizeDecision = (decision) => (decision || "needs_review").toLowerCase();
+  const policyDocuments = documents.filter(
+    (document) => document.document_type === "policy" && (!policyCategory || document.category === policyCategory)
+  );
+  const claimEvidenceDocuments = documents.filter((document) => document.document_type !== "policy");
+  const selectedClaimDocuments = claimEvidenceDocuments.filter((document) =>
+    selectedClaimDocumentIds.includes(String(document.id))
+  );
+
+  const toggleClaimDocument = (documentId) => {
+    const id = String(documentId);
+    setSelectedClaimDocumentIds((current) =>
+      current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
+    );
+  };
 
   const decisionClass = (decision) => {
-    const normalized = normalizeDecision(decision);
+    const normalized = (decision || "needs_review").toLowerCase();
     if (normalized === "approved") return "status-badge approved";
     if (normalized === "rejected") return "status-badge rejected";
     return "status-badge needs-review";
@@ -55,6 +80,8 @@ function ClaimAnalysis() {
         hospital_name: hospitalName || "not provided",
         claim_amount: claimAmount ? Number(claimAmount) : null,
         policy_category: policyCategory,
+        policy_document_id: selectedPolicyId ? Number(selectedPolicyId) : null,
+        claim_document_ids: selectedClaimDocumentIds.map((id) => Number(id)),
       });
       setResult(response.data);
       await fetchClaims();
@@ -89,90 +116,111 @@ function ClaimAnalysis() {
         <Navbar />
         <div className="claim-content">
           <h1>Claim Analysis & Claims</h1>
-          <p>
-            Generate a structured claim decision or ask questions using policy clauses, uploaded reports, and retrieved evidence.
-            Works for any report type or policy document.
-          </p>
+          <p>Generate and review structured claim decisions using policy clauses, uploaded reports, and retrieved evidence.</p>
 
-          <div className="analysis-box">
-            <div className="field-group">
-              <label className="field-label">Details / Question</label>
-              <input
-                type="text"
-                placeholder="Enter a question or description to analyze (e.g. policy applicability, claim eligibility)."
-                value={question}
-                onChange={(event) => setQuestion(event.target.value)}
-              />
+          {canAnalyzeClaims ? (
+            <>
+              <div className="analysis-box">
+                <div className="field-group">
+                  <label className="field-label">Details / Question</label>
+                  <input
+                    type="text"
+                    placeholder="Enter a question or description to analyze."
+                    value={question}
+                    onChange={(event) => setQuestion(event.target.value)}
+                  />
+                </div>
+
+                <div className="field-group">
+                  <label className="field-label">Diagnosis / condition</label>
+                  <input
+                    type="text"
+                    placeholder="Example: Knee ligament tear"
+                    value={diagnosis}
+                    onChange={(event) => setDiagnosis(event.target.value)}
+                  />
+                </div>
+
+                <div className="field-group">
+                  <label className="field-label">Hospital name</label>
+                  <input
+                    type="text"
+                    placeholder="Enter hospital or network provider"
+                    value={hospitalName}
+                    onChange={(event) => setHospitalName(event.target.value)}
+                  />
+                </div>
+
+                <div className="field-group">
+                  <label className="field-label">Claim amount (Rs.)</label>
+                  <input
+                    type="number"
+                    placeholder="Enter claim amount"
+                    value={claimAmount}
+                    onChange={(event) => setClaimAmount(event.target.value)}
+                  />
+                </div>
+
+                <div className="field-group">
+                  <label className="field-label">Policy type</label>
+                  <select value={policyCategory} onChange={(event) => setPolicyCategory(event.target.value)}>
+                    <option value="health_policy">Health Policy</option>
+                    <option value="vehicle_policy">Vehicle Policy</option>
+                    <option value="life_policy">Life Policy</option>
+                    <option value="home_policy">Home Policy</option>
+                    <option value="travel_policy">Travel Policy</option>
+                    <option value="personal_accident_policy">Personal Accident Policy</option>
+                    <option value="critical_illness_policy">Critical Illness Policy</option>
+                    <option value="property_policy">Property Policy</option>
+                    <option value="other">Others</option>
+                  </select>
+                </div>
+
+                <div className="field-group report-field">
+                  <label className="field-label">Policy document</label>
+                  <select value={selectedPolicyId} onChange={(event) => setSelectedPolicyId(event.target.value)}>
+                    <option value="">Use best matching indexed policy</option>
+                    {policyDocuments.map((document) => (
+                      <option key={document.id} value={document.id}>
+                        {document.filename}
+                      </option>
+                    ))}
+                  </select>
+                  {policyDocuments.length === 0 && (
+                    <div className="selected-report">No indexed policy found for this policy type.</div>
+                  )}
+                </div>
+
+                <div className="field-group evidence-field">
+                  <label className="field-label">Supporting claim evidence</label>
+                  <div className="evidence-picker">
+                    {claimEvidenceDocuments.length === 0 && <span>No supporting documents indexed yet.</span>}
+                    {claimEvidenceDocuments.map((document) => (
+                      <label key={document.id} className="evidence-option">
+                        <input
+                          type="checkbox"
+                          checked={selectedClaimDocumentIds.includes(String(document.id))}
+                          onChange={() => toggleClaimDocument(document.id)}
+                        />
+                        <span>{document.filename}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {validationMessage && <div className="validation-message">{validationMessage}</div>}
+
+              <button className="analyze-button" onClick={analyzeClaim} disabled={loading}>
+                {loading ? "Analyzing claim..." : "Analyze Claim"}
+              </button>
+            </>
+          ) : (
+            <div className="result-card">
+              <h2>Claim Audit View</h2>
+              <p>Auditors can inspect claim history, retrieved sources, RAG evaluation, and explanation trails.</p>
             </div>
-
-            <div className="field-group">
-              <label className="field-label">Diagnosis / condition</label>
-              <input
-                type="text"
-                placeholder="Example: Knee ligament tear / ACL reconstruction"
-                value={diagnosis}
-                onChange={(event) => setDiagnosis(event.target.value)}
-              />
-            </div>
-
-            <div className="field-group">
-              <label className="field-label">Hospital name</label>
-              <input
-                type="text"
-                placeholder="Enter hospital or network provider"
-                value={hospitalName}
-                onChange={(event) => setHospitalName(event.target.value)}
-              />
-            </div>
-
-            <div className="field-group">
-              <label className="field-label">Claim amount (₹)</label>
-              <input
-                type="number"
-                placeholder="Enter claim amount (₹)"
-                value={claimAmount}
-                onChange={(event) => setClaimAmount(event.target.value)}
-              />
-            </div>
-
-            <div className="field-group">
-              <label className="field-label">Policy type</label>
-              <select value={policyCategory} onChange={(event) => setPolicyCategory(event.target.value)}>
-                <option value="health_policy">Health Policy</option>
-                <option value="vehicle_policy">Vehicle Policy</option>
-                <option value="life_policy">Life Policy</option>
-                <option value="home_policy">Home Policy</option>
-                <option value="travel_policy">Travel Policy</option>
-                <option value="personal_accident_policy">Personal Accident Policy</option>
-                <option value="critical_illness_policy">Critical Illness Policy</option>
-                <option value="property_policy">Property Policy</option>
-                <option value="other">Others</option>
-              </select>
-            </div>
-
-            <div className="field-group report-field">
-              <label className="field-label">Report(s)</label>
-              <label className="upload-button">
-                <input
-                  type="file"
-                  accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
-                  multiple
-                  onChange={(event) => {
-                    const files = Array.from(event.target.files || []);
-                    setSelectedReport(files.map((f) => f.name).join(", "));
-                  }}
-                />
-                Upload Report(s)
-              </label>
-              {selectedReport && <div className="selected-report">Selected: {selectedReport}</div>}
-            </div>
-          </div>
-
-          {validationMessage && <div className="validation-message">{validationMessage}</div>}
-
-          <button className="analyze-button" onClick={analyzeClaim} disabled={loading}>
-            {loading ? "Analyzing claim..." : "Analyze Claim"}
-          </button>
+          )}
 
           {result && (
             <div className="result-card">
@@ -184,28 +232,13 @@ function ClaimAnalysis() {
               </div>
 
               <div className="result-grid">
-                <div className="result-stat">
-                  <span>Confidence</span>
-                  <strong>{result.confidence || "medium"}</strong>
-                </div>
-                <div className="result-stat">
-                  <span>Claim Amount</span>
-                  <strong>₹{claimAmount || "0"}</strong>
-                </div>
-                <div className="result-stat">
-                  <span>Policy Type</span>
-                  <strong>{policyLabel}</strong>
-                </div>
-                <div className="result-stat">
-                  <span>Report</span>
-                  <strong>{selectedReport || "No report attached"}</strong>
-                </div>
+                <div className="result-stat"><span>Confidence</span><strong>{result.confidence || "medium"}</strong></div>
+                <div className="result-stat"><span>Claim Amount</span><strong>Rs. {claimAmount || "0"}</strong></div>
+                <div className="result-stat"><span>Policy Type</span><strong>{policyLabel}</strong></div>
+                <div className="result-stat"><span>Evidence Docs</span><strong>{selectedClaimDocuments.length || "None selected"}</strong></div>
               </div>
 
-              <div className="section">
-                <h3>Rationale</h3>
-                <p>{result.rationale}</p>
-              </div>
+              <div className="section"><h3>Rationale</h3><p>{result.rationale}</p></div>
 
               <div className="section">
                 <h3>Operational Findings</h3>
@@ -217,24 +250,47 @@ function ClaimAnalysis() {
                 </ul>
               </div>
 
+              {result.document_checklist && (
+                <div className="section">
+                  <h3>Claim Document Checklist</h3>
+                  <ul>
+                    {(result.document_checklist.required || []).map((item) => (
+                      <li key={item.document_type}>
+                        <strong>{item.present ? "Present" : "Missing"}:</strong> {item.label}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {result.rag_evaluation && (
+                <div className="section">
+                  <h3>RAG Evaluation</h3>
+                  <ul>
+                    <li><strong>Grounded:</strong> {result.rag_evaluation.grounded ? "Yes" : "Needs review"}</li>
+                    <li><strong>Sources:</strong> {result.rag_evaluation.source_count || 0}</li>
+                    <li><strong>Policy Sources:</strong> {result.rag_evaluation.policy_source_count || 0}</li>
+                    <li><strong>Claim Evidence Sources:</strong> {result.rag_evaluation.claim_source_count || 0}</li>
+                    <li><strong>Warnings:</strong> {(result.rag_evaluation.warnings || []).join(", ") || "None"}</li>
+                  </ul>
+                </div>
+              )}
+
               {result.escalation_required && (
                 <div className="section warning-panel">
                   <h3>Human Review Required</h3>
-                  <p>This decision was escalated for manual claims review because the evidence was low-confidence or incomplete.</p>
+                  <p>This decision was escalated because the evidence was low-confidence or incomplete.</p>
                 </div>
               )}
 
               <div className="section">
                 <h3>Explainability Trail</h3>
                 <p>{Array.isArray(result.explanation_trail)
-                  ? result.explanation_trail.join(" • ")
-                  : (result.explanation_trail || result.next_steps?.join(" • ") || "No additional trail recorded.")}</p>
+                  ? result.explanation_trail.join(" | ")
+                  : (result.explanation_trail || result.next_steps?.join(" | ") || "No additional trail recorded.")}</p>
               </div>
 
-              <div className="section">
-                <h3>Evidence Summary</h3>
-                <p>{result.evidence_summary || "No structured evidence was returned."}</p>
-              </div>
+              <div className="section"><h3>Evidence Summary</h3><p>{result.evidence_summary || "No structured evidence was returned."}</p></div>
 
               {Array.isArray(result.sources) && result.sources.length > 0 && (
                 <div className="section source-panel">
@@ -243,7 +299,7 @@ function ClaimAnalysis() {
                     {result.sources.map((source, index) => (
                       <li key={index}>
                         <strong>{source.source || "unknown source"}</strong>
-                        {source.page && <span> — page: {source.page}</span>}
+                        {source.page && <span> - page: {source.page}</span>}
                         <div className="source-excerpt">{source.excerpt || "No excerpt available."}</div>
                       </li>
                     ))}
@@ -268,17 +324,13 @@ function ClaimAnalysis() {
               </thead>
               <tbody>
                 {claims.length === 0 && (
-                  <tr>
-                    <td colSpan="6">No claim analyses yet.</td>
-                  </tr>
+                  <tr><td colSpan="6">No claim analyses yet.</td></tr>
                 )}
                 {claims.map((claim) => (
                   <tr key={claim.id}>
                     <td>{formatDate(claim.created_at)}</td>
                     <td>{claim.question}</td>
-                    <td>
-                      <span className={decisionClass(claim.decision)}>{claim.decision}</span>
-                    </td>
+                    <td><span className={decisionClass(claim.decision)}>{claim.decision}</span></td>
                     <td>{claim.confidence}</td>
                     <td>{claim.created_by}</td>
                     <td><Link to={`/claims/${claim.id}`}>Open</Link></td>

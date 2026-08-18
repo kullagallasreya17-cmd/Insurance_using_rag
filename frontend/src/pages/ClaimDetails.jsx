@@ -34,8 +34,21 @@ function ClaimDetails() {
           <p><strong>Question:</strong> {claim.question}</p>
           <p><strong>Rationale:</strong> {claim.rationale}</p>
           <p><strong>Missing Information:</strong> {claim.missing_information || "None"}</p>
-          <p><strong>Explanation Trail:</strong> {Array.isArray(claim.explanation_trail) ? claim.explanation_trail.join(" • ") : claim.explanation_trail || "Not available"}</p>
+          <p><strong>Policy Document ID:</strong> {claim.policy_document_id || "Best matching policy used"}</p>
+          <p><strong>Claim Evidence IDs:</strong> {(claim.claim_document_ids || []).join(", ") || "None selected"}</p>
+          <p><strong>Explanation Trail:</strong> {Array.isArray(claim.explanation_trail) ? claim.explanation_trail.join(" | ") : claim.explanation_trail || "Not available"}</p>
           <p><strong>Evidence Summary:</strong> {claim.evidence_summary || "Not available"}</p>
+
+          {claim.rag_evaluation && (
+            <div>
+              <h3>RAG Evaluation</h3>
+              <p><strong>Grounded:</strong> {claim.rag_evaluation.grounded ? "Yes" : "Needs review"}</p>
+              <p><strong>Policy Sources:</strong> {claim.rag_evaluation.policy_source_count || 0}</p>
+              <p><strong>Claim Evidence Sources:</strong> {claim.rag_evaluation.claim_source_count || 0}</p>
+              <p><strong>Warnings:</strong> {(claim.rag_evaluation.warnings || []).join(", ") || "None"}</p>
+            </div>
+          )}
+
           {Array.isArray(claim.sources) && claim.sources.length > 0 && (
             <div>
               <h3>Retrieved Sources</h3>
@@ -43,7 +56,8 @@ function ClaimDetails() {
                 {claim.sources.map((source, index) => (
                   <li key={index}>
                     <strong>{source.source || "unknown source"}</strong>
-                    {source.page && <span> — page: {source.page}</span>}
+                    {source.page && <span> - page: {source.page}</span>}
+                    {source.evidence_role && <span> - role: {source.evidence_role}</span>}
                     <div>{source.excerpt || "No excerpt available."}</div>
                   </li>
                 ))}

@@ -81,6 +81,42 @@
     font-weight: 700;
 }
 
+.evidence-field {
+    grid-column: span 2;
+}
+
+.evidence-picker {
+    display: grid;
+    gap: 8px;
+    max-height: 150px;
+    overflow: auto;
+    padding: 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    background: #fff;
+}
+
+.evidence-picker span {
+    color: #64748b;
+    font-size: 13px;
+}
+
+.evidence-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #334155;
+    font-size: 14px;
+    line-height: 1.35;
+}
+
+.evidence-option input {
+    width: 16px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0;
+}
+
 .validation-message {
     margin: 12px 0 16px;
     padding: 12px 14px;
@@ -240,6 +276,10 @@
 
     .analysis-box {
         grid-template-columns: 1fr;
+    }
+
+    .evidence-field {
+        grid-column: auto;
     }
 
     .result-grid {

@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ChatRequest(BaseModel):
@@ -14,6 +14,9 @@ class ClaimRequest(BaseModel):
     claim_amount: float | None = None
     bill_amount: float | None = None
     policy_category: str | None = None
+    policy_document_id: int | None = None
+    claim_document_ids: list[int] = Field(default_factory=list)
+    uploaded_document_types: list[str] = Field(default_factory=list)
 
 
 class LoginRequest(BaseModel):
@@ -25,4 +28,4 @@ class RegisterRequest(BaseModel):
     username: str
     password: str
     full_name: str
-    role: str = "admin"
+    role: str = "customer"

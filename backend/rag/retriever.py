@@ -4,11 +4,24 @@ import os
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
-from rag.vectorstore import get_mongo_collection, get_mongo_vector_store
+from langchain_core.documents import Document
+
+from rag.vectorstore import (
+    MONGO_EMBEDDING_KEY,
+    MONGO_TEXT_KEY,
+    get_mongo_collection,
+    get_mongo_vector_store,
+)
 
 
 RAG_SIMILARITY_THRESHOLD = float(os.getenv("RAG_SIMILARITY_THRESHOLD", "0.15"))
 RAG_FETCH_K = int(os.getenv("RAG_FETCH_K", "30"))
+RAG_RERANK_ENABLED = os.getenv("RAG_RERANK_ENABLED", "1") != "0"
+RAG_RERANK_STRATEGY = os.getenv("RAG_RERANK_STRATEGY", "lexical").lower()
+RAG_RERANK_MODEL = os.getenv("RAG_RERANK_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+RAG_RERANK_VECTOR_WEIGHT = float(os.getenv("RAG_RERANK_VECTOR_WEIGHT", "0.65"))
+RAG_HYBRID_LEXICAL_K = int(os.getenv("RAG_HYBRID_LEXICAL_K", "30"))
+_CROSS_ENCODER = None
 
 POLICY_STOP_WORDS = {
     "backend",
@@ -24,6 +37,34 @@ POLICY_STOP_WORDS = {
     "uploaded",
     "wording",
     "wordings",
+}
+
+RERANK_STOP_WORDS = POLICY_STOP_WORDS | {
+    "about",
+    "after",
+    "against",
+    "also",
+    "any",
+    "are",
+    "based",
+    "can",
+    "does",
+    "for",
+    "from",
+    "give",
+    "has",
+    "how",
+    "into",
+    "its",
+    "only",
+    "tell",
+    "the",
+    "this",
+    "what",
+    "when",
+    "where",
+    "which",
+    "with",
 }
 
 CATEGORY_ALIASES = {
@@ -69,7 +110,23 @@ def _normalize_text(value: str) -> str:
 
 def _is_compare_query(query: str) -> bool:
     normalized = _normalize_text(query)
-    return bool(re.search(r"\b(compare|versus|vs|v\.|different|difference|both|either)\b", normalized))
+    return bool(
+        re.search(
+            r"\b(compare|versus|vs|v|different|difference|both|either|among|between|highest|lowest|maximum|minimum|best|least|most)\b",
+            normalized,
+        )
+    )
+
+
+def _is_multi_document_query(query: str) -> bool:
+    normalized = _normalize_text(query)
+    if _is_compare_query(query):
+        return True
+    return bool(
+        re.search(r"\b(which|what)\s+polic(?:y|ies)\b", normalized)
+        or re.search(r"\bpolicies\b.*\b(uploaded|indexed|available|all)\b", normalized)
+        or re.search(r"\b(uploaded|indexed|available|all)\b.*\bpolicies\b", normalized)
+    )
 
 
 def _is_policy_query(query: str) -> bool:
@@ -92,13 +149,20 @@ def _distinctive_tokens(value: str) -> list[str]:
 
 
 def _infer_category_from_query(query: str) -> str | None:
+    categories = _infer_categories_from_query(query)
+    return categories[0] if len(categories) == 1 else None
+
+
+def _infer_categories_from_query(query: str) -> list[str]:
     normalized = _normalize_text(query)
+    categories = []
     for category, aliases in CATEGORY_ALIASES.items():
         for alias in aliases:
             alias_normalized = _normalize_text(alias)
             if alias_normalized and alias_normalized in normalized:
-                return category
-    return None
+                categories.append(category)
+                break
+    return categories
 
 
 def _is_explicit_document_query(query: str) -> bool:
@@ -211,8 +275,9 @@ def _find_policy_sources(query: str) -> list[str]:
 
 
 def _build_retrieval_plan(query: str, category: str | None = None) -> RetrievalPlan:
-    allow_multiple = _is_compare_query(query)
-    inferred_category = category or (None if allow_multiple else _infer_category_from_query(query))
+    allow_multiple = _is_multi_document_query(query)
+    inferred_categories = _infer_categories_from_query(query)
+    inferred_category = category or (inferred_categories[0] if len(inferred_categories) == 1 else None)
     explicit_document = _is_explicit_document_query(query)
     policy_sources = _find_policy_sources(query)
     query_filter: dict[str, object] = {}
@@ -296,6 +361,189 @@ def _chunk_dedup_key(doc) -> tuple:
     )
 
 
+def _rerank_tokens(value: str) -> set[str]:
+    return {
+        token
+        for token in _normalize_text(value).split()
+        if len(token) > 2 and token not in RERANK_STOP_WORDS
+    }
+
+
+def _lexical_rerank_score(query: str, text: str) -> float:
+    query_tokens = _rerank_tokens(query)
+    if not query_tokens:
+        return 0.0
+
+    text_tokens = _rerank_tokens(text)
+    if not text_tokens:
+        return 0.0
+
+    overlap = query_tokens.intersection(text_tokens)
+    recall = len(overlap) / len(query_tokens)
+    precision = len(overlap) / max(len(text_tokens), 1)
+    score = (0.8 * recall) + (0.2 * precision)
+
+    normalized_query = _normalize_text(query)
+    normalized_text = _normalize_text(text)
+    for phrase_size in (3, 2):
+        query_parts = normalized_query.split()
+        for start in range(0, max(len(query_parts) - phrase_size + 1, 0)):
+            phrase = " ".join(query_parts[start : start + phrase_size])
+            if phrase and phrase in normalized_text:
+                score += 0.05
+
+    return min(score, 1.0)
+
+
+def _lexical_search_with_scores(query: str, query_filter: dict | None, k: int) -> list[tuple[Document, float]]:
+    """Retrieve lexical matches directly from MongoDB for hybrid recall.
+
+    Mongo Atlas vector search can miss exact policy terms such as "FIR",
+    "discharge summary", or "cashless". This lightweight lexical pass gives
+    those exact-match chunks a chance before the reranker chooses the final set.
+    """
+    tokens = _rerank_tokens(query)
+    if not tokens:
+        return []
+
+    try:
+        collection = get_mongo_collection()
+        records = collection.find(query_filter or {})
+    except Exception as exc:
+        logging.warning("Hybrid lexical retrieval unavailable: %s", exc)
+        return []
+
+    scored: list[tuple[Document, float]] = []
+    for record in records:
+        text = record.get(MONGO_TEXT_KEY, "") or ""
+        score = _lexical_rerank_score(query, text)
+        if score <= 0:
+            continue
+
+        metadata = {
+            key: value
+            for key, value in record.items()
+            if key not in {MONGO_TEXT_KEY, MONGO_EMBEDDING_KEY, "_id"}
+        }
+        metadata["lexical_score"] = score
+        scored.append((Document(page_content=text, metadata=metadata), score))
+
+    scored.sort(key=lambda item: item[1], reverse=True)
+    return scored[:k]
+
+
+def _get_cross_encoder():
+    global _CROSS_ENCODER
+    if _CROSS_ENCODER is not None:
+        return _CROSS_ENCODER
+
+    try:
+        from sentence_transformers import CrossEncoder
+
+        _CROSS_ENCODER = CrossEncoder(RAG_RERANK_MODEL)
+        return _CROSS_ENCODER
+    except Exception as exc:
+        logging.warning("Cross-encoder reranker unavailable: %s. Falling back to lexical rerank.", exc)
+        return None
+
+
+def _rerank_results(query: str, candidates: list[tuple[object, float, str]]) -> list[tuple[object, float, str]]:
+    if not RAG_RERANK_ENABLED or len(candidates) <= 1:
+        return candidates
+
+    vector_weight = min(max(RAG_RERANK_VECTOR_WEIGHT, 0.0), 1.0)
+    reranked: list[tuple[object, float, str]] = []
+
+    cross_scores = None
+    if RAG_RERANK_STRATEGY == "cross_encoder":
+        cross_encoder = _get_cross_encoder()
+        if cross_encoder is not None:
+            pairs = [(query, doc.page_content or "") for doc, _score, _reason in candidates]
+            try:
+                cross_scores = [float(score) for score in cross_encoder.predict(pairs)]
+            except Exception as exc:
+                logging.warning("Cross-encoder rerank failed: %s. Falling back to lexical rerank.", exc)
+
+    for index, (doc, vector_score, reason) in enumerate(candidates):
+        lexical_score = _lexical_rerank_score(query, doc.page_content or "")
+        if cross_scores is not None:
+            rerank_signal = cross_scores[index]
+        else:
+            rerank_signal = lexical_score
+
+        final_score = (vector_weight * float(vector_score)) + ((1.0 - vector_weight) * rerank_signal)
+        doc.metadata["vector_score"] = float(vector_score)
+        doc.metadata["rerank_score"] = float(final_score)
+        doc.metadata["rerank_signal"] = float(rerank_signal)
+        doc.metadata["rerank_strategy"] = "cross_encoder" if cross_scores is not None else "lexical"
+        reranked.append((doc, float(final_score), f"{reason}:reranked"))
+
+    return sorted(reranked, key=lambda item: item[1], reverse=True)
+
+
+def _source_key(doc) -> str:
+    meta = getattr(doc, "metadata", {}) or {}
+    return str(
+        meta.get("document_id")
+        or meta.get("source")
+        or meta.get("filename")
+        or meta.get("document_name")
+        or "unknown"
+    )
+
+
+def _diversify_multi_document_results(
+    results: list[tuple[object, float, str]],
+    k: int = 6,
+    max_per_source: int = 2,
+) -> list[tuple[object, float, str]]:
+    """Keep high scoring chunks while forcing multi-policy coverage.
+
+    For comparison/superlative questions, the answer needs evidence from each
+    candidate policy. Pure top-k retrieval often returns several chunks from one
+    policy, which makes the generator answer as if only that document exists.
+    """
+    if len(results) <= 1:
+        return results[:k]
+
+    by_source: dict[str, list[tuple[object, float, str]]] = {}
+    for item in results:
+        by_source.setdefault(_source_key(item[0]), []).append(item)
+
+    if len(by_source) <= 1:
+        return results[:k]
+
+    diversified: list[tuple[object, float, str]] = []
+    for source_results in by_source.values():
+        source_results.sort(key=lambda item: item[1], reverse=True)
+        diversified.append(source_results[0])
+
+    remaining = [
+        item
+        for item in results
+        if item not in diversified
+    ]
+    remaining.sort(key=lambda item: item[1], reverse=True)
+
+    source_counts: dict[str, int] = {}
+    final_results: list[tuple[object, float, str]] = []
+    for item in sorted(diversified, key=lambda item: item[1], reverse=True):
+        source = _source_key(item[0])
+        source_counts[source] = source_counts.get(source, 0) + 1
+        final_results.append(item)
+
+    for item in remaining:
+        if len(final_results) >= k:
+            break
+        source = _source_key(item[0])
+        if source_counts.get(source, 0) >= max_per_source:
+            continue
+        source_counts[source] = source_counts.get(source, 0) + 1
+        final_results.append(item)
+
+    return final_results[:k]
+
+
 def _log_retrieval_debug(question: str, plan: RetrievalPlan, accepted, rejected) -> None:
     logging.info(
         "RAG retrieval plan: question=%r detected_category=%s detected_sources=%s "
@@ -314,7 +562,7 @@ def _log_retrieval_debug(question: str, plan: RetrievalPlan, accepted, rejected)
             meta = doc.metadata or {}
             logging.info(
                 "RAG %s chunk %s: source=%s filename=%s category=%s document_type=%s "
-                "page=%s chunk_id=%s score=%.4f reason=%s",
+                "page=%s chunk_id=%s score=%.4f vector_score=%s rerank_score=%s reason=%s",
                 label,
                 index,
                 meta.get("source"),
@@ -324,6 +572,8 @@ def _log_retrieval_debug(question: str, plan: RetrievalPlan, accepted, rejected)
                 meta.get("page_label") or meta.get("page"),
                 meta.get("chunk_id"),
                 float(score),
+                meta.get("vector_score"),
+                meta.get("rerank_score"),
                 reason,
             )
 
@@ -340,11 +590,17 @@ def retrieve_documents_with_scores(
     if override_filter is not None:
         plan.query_filter = override_filter
 
-    raw_docs_with_scores = vector_store.similarity_search_with_score(
+    vector_docs_with_scores = vector_store.similarity_search_with_score(
         query,
         k=RAG_FETCH_K,
         filter=query_filter,
     )
+    lexical_docs_with_scores = _lexical_search_with_scores(
+        query,
+        query_filter,
+        RAG_HYBRID_LEXICAL_K,
+    )
+    raw_docs_with_scores = vector_docs_with_scores + lexical_docs_with_scores
 
     accepted_with_reason: list[tuple[object, float, str]] = []
     rejected_with_reason: list[tuple[object, float, str]] = []
@@ -371,7 +627,11 @@ def retrieve_documents_with_scores(
         doc.metadata["retrieval_score"] = score
         accepted_with_reason.append((doc, score, "accepted"))
 
-    accepted_with_reason = accepted_with_reason[:6]
+    accepted_with_reason = _rerank_results(query, accepted_with_reason)
+    if plan.allow_multiple_documents:
+        accepted_with_reason = _diversify_multi_document_results(accepted_with_reason, k=6, max_per_source=2)
+    else:
+        accepted_with_reason = accepted_with_reason[:6]
     _log_retrieval_debug(query, plan, accepted_with_reason, rejected_with_reason)
     docs_with_scores = [(doc, score) for doc, score, _reason in accepted_with_reason]
 
@@ -389,6 +649,50 @@ def retrieve_documents_with_scores(
         print(f"   {preview}")
 
     return docs_with_scores
+
+
+def retrieve_documents_with_scores_expanded(
+    query,
+    category: str | None = None,
+    override_filter: dict | None = None,
+    override_plan: RetrievalPlan | None = None,
+    k: int = 6,
+):
+    """Retrieve with query decomposition/expansion while preserving scores.
+
+    Claim analysis and confidence scoring need retrieval scores, but the older
+    scored API only searched the raw query. This mirrors retrieve_documents()
+    so scored callers also get decomposition, hybrid lexical recall, and
+    reranking.
+    """
+    parts = _query_transform(query)
+    forced_plan = override_plan or _build_retrieval_plan(query, category=category)
+    forced_filter = override_filter if override_filter is not None else forced_plan.query_filter
+
+    aggregated: list[tuple[object, float]] = []
+    seen_keys = set()
+
+    for part in parts:
+        for expanded_query in _expand_query(part):
+            results = retrieve_documents_with_scores(
+                expanded_query,
+                category=category,
+                override_filter=forced_filter,
+                override_plan=forced_plan,
+            )
+            for doc, score in results:
+                dedup_key = _chunk_dedup_key(doc)
+                if dedup_key in seen_keys:
+                    continue
+                seen_keys.add(dedup_key)
+                doc.metadata["retrieval_query"] = expanded_query
+                aggregated.append((doc, score))
+            if len(aggregated) >= k:
+                break
+        if len(aggregated) >= k:
+            break
+
+    return aggregated[:k]
 
 
 def retrieve_documents(query, category: str | None = None):

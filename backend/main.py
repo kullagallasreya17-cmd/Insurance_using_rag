@@ -15,7 +15,7 @@ if sys.platform == "win32":
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile, Request
+from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, RedirectResponse
 
@@ -28,6 +28,7 @@ from rag.mongo_indexer import MongoJobIndexer
 from rag.rq_indexer import RQJobIndexer
 from rag.indexer import extract_document_preview, index_document
 from rag.retriever import retrieve_documents
+from rag.summarizer import generate_policy_summary
 from schemas import ChatRequest, ClaimRequest, LoginRequest, RegisterRequest
 from storage import get_storage
 
@@ -65,16 +66,18 @@ KNOWLEDGE_CATEGORIES = [
     "other",
 ]
 
-SINGLE_ROLE = "admin"
 LEGACY_ROLE_ALIASES = {
     "admin": "admin",
     "analyst": "admin",
     "agent": "admin",
-    "auditor": "admin",
+    "customer": "customer",
+    "auditor": "auditor",
 }
 
 ROLE_CATEGORY_ACCESS = {
     "admin": set(KNOWLEDGE_CATEGORIES),
+    "customer": set(KNOWLEDGE_CATEGORIES),
+    "auditor": set(KNOWLEDGE_CATEGORIES),
 }
 
 ROLE_PERMISSIONS = {
@@ -89,7 +92,26 @@ ROLE_PERMISSIONS = {
         "dashboard:read",
         "analytics:read",
         "admin:read",
+        "audit:read",
+        "monitoring:read",
+        "users:manage",
         "settings:edit",
+    ],
+    "customer": [
+        "documents:upload",
+        "documents:read",
+        "chat:ask",
+        "claims:analyze",
+        "claims:read",
+        "dashboard:read",
+    ],
+    "auditor": [
+        "documents:read",
+        "claims:read",
+        "dashboard:read",
+        "analytics:read",
+        "audit:read",
+        "monitoring:read",
     ],
 }
 
@@ -180,6 +202,15 @@ def process_indexing_job(job: dict):
                 document_id=document_id,
                 filename=job.get("filename", document.get("filename")),
             )
+
+            if job.get("document_type", document.get("document_type")) == "policy":
+                db.documents.update_one(
+                    {"id": document_id},
+                    {"$set": {"summary_status": "generating", "updated_at": datetime.utcnow()}},
+                )
+                summary_result = generate_policy_summary({**document, **job, "id": document_id})
+            else:
+                summary_result = None
     except Exception as exc:
         error_message = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
         logging.error("Indexing failed for document %s: %s", document_id, error_message)
@@ -191,6 +222,12 @@ def process_indexing_job(job: dict):
                 "indexing_error_trace": traceback.format_exc(),
                 "updated_at": datetime.utcnow(),
             }}
+        )
+        record_metric_event(
+            db,
+            "document_indexing",
+            status="failed",
+            details={"document_id": document_id, "stage": "indexing", "error": str(exc)},
         )
         log_audit_event(
             db,
@@ -204,19 +241,40 @@ def process_indexing_job(job: dict):
         raise
 
     final_status = "indexed" if index_result.get("status") in {"indexed", "skipped", "completed"} else "failed"
+    update_fields = {
+        "status": final_status,
+        "pages": index_result.get("pages", 0),
+        "chunks": index_result.get("chunks", 0),
+        "word_count": index_result.get("word_count", 0),
+        "processing_time_seconds": index_result.get("processing_time_seconds", 0),
+        "indexed_at": datetime.utcnow(),
+        "indexing_error": None,
+        "updated_at": datetime.utcnow(),
+    }
+    if summary_result:
+        update_fields.update(
+            {
+                "policy_summary": summary_result.get("summary"),
+                "summary_status": summary_result.get("summary_status"),
+                "summary_error": summary_result.get("summary_error"),
+                "summary_generated_at": summary_result.get("summary_generated_at"),
+            }
+        )
+
     db.documents.update_one(
         {"id": document_id},
-        {
-            "$set": {
-                "status": final_status,
-                "pages": index_result.get("pages", 0),
-                "chunks": index_result.get("chunks", 0),
-                "word_count": index_result.get("word_count", 0),
-                "processing_time_seconds": index_result.get("processing_time_seconds", 0),
-                "indexed_at": datetime.utcnow(),
-                "indexing_error": None,
-                "updated_at": datetime.utcnow(),
-            }
+        {"$set": update_fields},
+    )
+    record_metric_event(
+        db,
+        "document_indexing",
+        status="success",
+        duration_ms=float(index_result.get("processing_time_seconds", 0) or 0) * 1000,
+        details={
+            "document_id": document_id,
+            "pages": index_result.get("pages", 0),
+            "chunks": index_result.get("chunks", 0),
+            "chunks_indexed": index_result.get("chunks_indexed", 0),
         },
     )
 
@@ -283,15 +341,79 @@ def enqueue_indexing_job(payload: dict) -> str:
 
 
 def normalize_role(role: str | None) -> str:
-    return LEGACY_ROLE_ALIASES.get((role or "").lower(), SINGLE_ROLE)
+    return LEGACY_ROLE_ALIASES.get((role or "").lower(), "customer")
 
 
 def get_accessible_categories(role: str | None):
-    return set(KNOWLEDGE_CATEGORIES) if normalize_role(role) == SINGLE_ROLE else set()
+    return set(ROLE_CATEGORY_ACCESS.get(normalize_role(role), ROLE_CATEGORY_ACCESS["customer"]))
 
 
 def get_role_permissions(role: str | None) -> list[str]:
-    return ROLE_PERMISSIONS.get(normalize_role(role), ROLE_PERMISSIONS[SINGLE_ROLE])
+    return ROLE_PERMISSIONS.get(normalize_role(role), ROLE_PERMISSIONS["customer"])
+
+
+def require_permission(current_user: dict, permission: str):
+    if permission not in get_role_permissions(current_user.get("role")):
+        raise HTTPException(status_code=403, detail=f"Permission required: {permission}")
+
+
+def require_any_permission(current_user: dict, permissions: list[str]):
+    user_permissions = set(get_role_permissions(current_user.get("role")))
+    if not user_permissions.intersection(permissions):
+        raise HTTPException(status_code=403, detail=f"One of these permissions is required: {', '.join(permissions)}")
+
+
+def can_view_all_records(current_user: dict) -> bool:
+    return normalize_role(current_user.get("role")) in {"admin", "auditor"}
+
+
+def owner_scoped_query(current_user: dict, owner_field: str = "uploaded_by") -> dict:
+    if can_view_all_records(current_user):
+        return {}
+    return {owner_field: current_user["username"]}
+
+
+def require_document_access(document: dict | None, current_user: dict, expected_type: str | None = None) -> dict:
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if expected_type and document.get("document_type") != expected_type:
+        raise HTTPException(status_code=400, detail=f"Expected a {expected_type} document")
+    if not can_view_all_records(current_user) and document.get("uploaded_by") != current_user["username"]:
+        raise HTTPException(status_code=403, detail="You can only use your own documents")
+    return document
+
+
+def resolve_claim_documents(db, request: ClaimRequest, current_user: dict) -> tuple[dict | None, list[dict], list[str]]:
+    policy_document = None
+    if request.policy_document_id is not None:
+        policy_document = require_document_access(
+            db.documents.find_one({"id": request.policy_document_id}),
+            current_user,
+            expected_type="policy",
+        )
+
+    claim_documents = []
+    if request.claim_document_ids:
+        found = list(db.documents.find({"id": {"$in": request.claim_document_ids}}))
+        found_by_id = {doc.get("id"): doc for doc in found}
+        missing_ids = [doc_id for doc_id in request.claim_document_ids if doc_id not in found_by_id]
+        if missing_ids:
+            raise HTTPException(status_code=404, detail=f"Claim document(s) not found: {missing_ids}")
+        for doc_id in request.claim_document_ids:
+            document = require_document_access(found_by_id[doc_id], current_user)
+            if document.get("document_type") == "policy":
+                raise HTTPException(status_code=400, detail="Claim document IDs must refer to supporting claim evidence, not policies")
+            claim_documents.append(document)
+
+    inferred_types = list(request.uploaded_document_types or [])
+    for document in claim_documents:
+        document_type = document.get("document_type")
+        if document_type and document_type not in inferred_types:
+            inferred_types.append(document_type)
+    if policy_document and "policy" not in inferred_types:
+        inferred_types.append("policy")
+
+    return policy_document, claim_documents, inferred_types
 
 
 def format_datetime(value):
@@ -300,6 +422,26 @@ def format_datetime(value):
     if hasattr(value, "isoformat"):
         return value.isoformat()
     return str(value)
+
+
+def format_details(value):
+    if isinstance(value, (dict, list)):
+        import json
+
+        return json.dumps(value, default=str)
+    return value or ""
+
+
+def normalize_list_field(value):
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return [value]
 
 
 def resolve_document_file(document: dict, db):
@@ -312,6 +454,7 @@ def resolve_document_file(document: dict, db):
 def log_audit_event(db, actor: str, role: str, action: str, target_type: str = "", target_id: str = "", details: str = ""):
     db.audit_logs.insert_one(
         {
+            "id": get_next_id("audit_logs"),
             "actor": actor,
             "actor_role": role,
             "action": action,
@@ -321,6 +464,107 @@ def log_audit_event(db, actor: str, role: str, action: str, target_type: str = "
             "created_at": datetime.utcnow(),
         }
     )
+
+
+def record_metric_event(
+    db,
+    event_type: str,
+    status: str = "success",
+    duration_ms: float = 0.0,
+    details: dict | None = None,
+):
+    db.monitoring_events.insert_one(
+        {
+            "id": get_next_id("monitoring_events"),
+            "event_type": event_type,
+            "status": status,
+            "duration_ms": round(float(duration_ms or 0.0), 2),
+            "details": details or {},
+            "created_at": datetime.utcnow(),
+        }
+    )
+
+
+def get_queue_depth() -> int | None:
+    try:
+        from rq import Queue
+        from redis import Redis
+
+        queue = Queue("rag-indexing", connection=Redis.from_url(REDIS_URL))
+        return len(queue)
+    except Exception:
+        return None
+
+
+def build_monitoring_snapshot(db):
+    documents_uploaded = db.documents.count_documents({})
+    documents_indexed = db.documents.count_documents({"status": {"$in": ["indexed", "completed"]}})
+    documents_processing = db.documents.count_documents({"status": "processing"})
+    failed_documents = db.documents.count_documents({"status": "failed"})
+    rag_queries = db.monitoring_events.count_documents({"event_type": {"$in": ["rag_query", "claim_analysis"]}})
+    successful_responses = db.monitoring_events.count_documents(
+        {"event_type": {"$in": ["rag_query", "claim_analysis"]}, "status": "success"}
+    )
+    failed_responses = db.monitoring_events.count_documents(
+        {"event_type": {"$in": ["rag_query", "claim_analysis"]}, "status": "failed"}
+    )
+
+    latency_rows = list(
+        db.monitoring_events.aggregate(
+            [
+                {"$match": {"event_type": {"$in": ["rag_query", "claim_analysis"]}}},
+                {
+                    "$group": {
+                        "_id": "$event_type",
+                        "avg_duration_ms": {"$avg": {"$ifNull": ["$duration_ms", 0]}},
+                        "count": {"$sum": 1},
+                    }
+                },
+            ]
+        )
+    )
+    latency = {
+        row["_id"]: {
+            "count": row.get("count", 0),
+            "avg_duration_ms": round(float(row.get("avg_duration_ms") or 0), 2),
+        }
+        for row in latency_rows
+    }
+
+    recent_events = list(
+        db.monitoring_events.find({}, {"_id": 0})
+        .sort("created_at", -1)
+        .limit(10)
+    )
+
+    return {
+        "documents_uploaded": documents_uploaded,
+        "documents_indexed": documents_indexed,
+        "documents_processing": documents_processing,
+        "failed_documents": failed_documents,
+        "rag_queries": rag_queries,
+        "successful_responses": successful_responses,
+        "failed_responses": failed_responses,
+        "api_errors": db.monitoring_events.count_documents({"status": "failed"}),
+        "queue_jobs": get_queue_depth(),
+        "latency": latency,
+        "recent_events": [
+            {
+                **event,
+                "created_at": format_datetime(event.get("created_at")),
+            }
+            for event in recent_events
+        ],
+        "pipeline": {
+            "upload": "ok" if documents_uploaded else "idle",
+            "queue": "ok" if (get_queue_depth() or 0) >= 0 else "unknown",
+            "worker": "degraded" if documents_processing and failed_documents else "ok",
+            "pdf_processing": "degraded" if failed_documents else "ok",
+            "embeddings": "ok" if documents_indexed else "idle",
+            "vector_db": "active",
+            "llm": "configured" if os.getenv("GOOGLE_API_KEY") else "not_configured",
+        },
+    }
 
 # -------------------------------------------------
 # Routes
@@ -371,7 +615,7 @@ def register(request: RegisterRequest, db = Depends(get_db)):
         "id": user_id,
         "username": request.username,
         "full_name": request.full_name,
-        "role": SINGLE_ROLE,
+        "role": normalize_role(request.role),
         "hashed_password": hash_password(request.password),
         "created_at": datetime.utcnow(),
     }
@@ -419,8 +663,34 @@ def serialize_document(document: dict) -> dict:
         "version": document.get("version", 1),
         "uploaded_by": document.get("uploaded_by"),
         "storage_backend": document.get("storage_backend", "local"),
+        "policy_summary": document.get("policy_summary", ""),
+        "summary_status": document.get("summary_status"),
+        "summary_error": document.get("summary_error"),
+        "summary_generated_at": format_datetime(document.get("summary_generated_at")),
         "created_at": format_datetime(document.get("created_at")),
     }
+
+
+def serialize_claim_analysis(claim: dict, include_sources: bool = False) -> dict:
+    data = {
+        "id": claim.get("id"),
+        "question": claim.get("question"),
+        "decision": claim.get("decision"),
+        "confidence": claim.get("confidence"),
+        "rationale": claim.get("rationale"),
+        "missing_information": normalize_list_field(claim.get("missing_information")),
+        "explanation_trail": normalize_list_field(claim.get("explanation_trail")),
+        "evidence_summary": claim.get("evidence_summary"),
+        "document_checklist": claim.get("document_checklist", {}),
+        "rag_evaluation": claim.get("rag_evaluation", {}),
+        "policy_document_id": claim.get("policy_document_id"),
+        "claim_document_ids": claim.get("claim_document_ids", []),
+        "created_by": claim.get("created_by"),
+        "created_at": format_datetime(claim.get("created_at")),
+    }
+    if include_sources:
+        data["sources"] = claim.get("sources", [])
+    return data
 
 
 @app.get("/profile")
@@ -441,13 +711,7 @@ def profile(
             "documents_uploaded": documents_uploaded,
             "claims_created": claims_created,
         },
-        "permissions": [
-            "documents:upload",
-            "documents:read",
-            "chat:ask",
-            "claims:analyze",
-            "dashboard:read",
-        ],
+        "permissions": get_role_permissions(current_user.get("role")),
     }
 
 
@@ -464,8 +728,9 @@ def list_documents(
     db = Depends(get_db),
     current_user = Depends(get_current_user),
 ):
+    require_permission(current_user, "documents:read")
     accessible = get_accessible_categories(current_user.get("role"))
-    query = {}
+    query = owner_scoped_query(current_user)
     if accessible:
         query["category"] = {"$in": list(accessible)}
     total = db.documents.count_documents(query)
@@ -482,6 +747,7 @@ def upload_history(
     db = Depends(get_db),
     current_user = Depends(get_current_user),
 ):
+    require_permission(current_user, "documents:read")
     accessible = get_accessible_categories(current_user.get("role", "agent"))
     query: dict = {"uploaded_by": current_user["username"]}
     if accessible is not None:
@@ -499,9 +765,12 @@ def download_document(
     db = Depends(get_db),
     current_user = Depends(get_current_user),
 ):
+    require_permission(current_user, "documents:read")
     document = db.documents.find_one({"id": document_id})
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
+    if not can_view_all_records(current_user) and document.get("uploaded_by") != current_user["username"]:
+        raise HTTPException(status_code=403, detail="You can only access your own documents")
 
     download_url = storage.download_url(document)
     if download_url:
@@ -528,6 +797,7 @@ def delete_document(
     db = Depends(get_db),
     current_user = Depends(get_current_user),
 ):
+    require_permission(current_user, "documents:delete")
     document = db.documents.find_one({"id": document_id})
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -544,7 +814,9 @@ def policies(
     db = Depends(get_db),
     current_user = Depends(get_current_user),
 ):
-    policy_docs = list(db.documents.find({"document_type": "policy"}).sort("created_at", -1).limit(200))
+    require_permission(current_user, "documents:read")
+    query = {"document_type": "policy", **owner_scoped_query(current_user)}
+    policy_docs = list(db.documents.find(query).sort("created_at", -1).limit(200))
     return {
         "policies": [
             {
@@ -558,6 +830,10 @@ def policies(
                 "version": doc.get("version", 1),
                 "uploaded_by": doc.get("uploaded_by"),
                 "stored_path": doc.get("stored_path"),
+                "policy_summary": doc.get("policy_summary", ""),
+                "summary_status": doc.get("summary_status"),
+                "summary_error": doc.get("summary_error"),
+                "summary_generated_at": format_datetime(doc.get("summary_generated_at")),
                 "created_at": format_datetime(doc.get("created_at")),
             }
             for doc in policy_docs
@@ -568,31 +844,20 @@ def policies(
 @app.get("/dashboard")
 def dashboard(
     db = Depends(get_db),
-    request: Request = None,
+    current_user = Depends(get_current_user),
 ):
-    # Try to resolve a JWT from the Authorization header; allow anonymous access for the dashboard
-    current_user = None
-    auth_header = None
-    try:
-        auth_header = request.headers.get("authorization") if request is not None else None
-    except Exception:
-        auth_header = None
+    require_permission(current_user, "dashboard:read")
+    document_scope = owner_scoped_query(current_user)
+    claim_scope = owner_scoped_query(current_user, owner_field="created_by")
 
-    if auth_header and isinstance(auth_header, str) and auth_header.lower().startswith("bearer "):
-        token = auth_header.split(" ", 1)[1]
-        try:
-            current_user = get_current_user(token=token, db=db)
-        except HTTPException:
-            current_user = None
-
-    total_documents = db.documents.count_documents({})
-    policies = db.documents.count_documents({"document_type": "policy"})
-    reports = db.documents.count_documents({"document_type": {"$ne": "policy"}})
-    claims = db.claim_analyses.count_documents({})
+    total_documents = db.documents.count_documents(document_scope)
+    policies = db.documents.count_documents({**document_scope, "document_type": "policy"})
+    reports = db.documents.count_documents({**document_scope, "document_type": {"$ne": "policy"}})
+    claims = db.claim_analyses.count_documents(claim_scope)
 
     claim_rows = list(
         db.claim_analyses.find(
-            {},
+            claim_scope,
             {"id": 1, "decision": 1, "confidence": 1, "created_at": 1, "_id": 0},
         ).sort("created_at", -1)
     )
@@ -616,7 +881,7 @@ def dashboard(
 
     recent_documents_rows = list(
         db.documents.find(
-            {},
+            document_scope,
             {"id": 1, "filename": 1, "category": 1, "status": 1, "created_at": 1, "_id": 0},
         ).sort("created_at", -1).limit(5)
     )
@@ -633,7 +898,7 @@ def dashboard(
 
     recent_claims_rows = list(
         db.claim_analyses.find(
-            {},
+            claim_scope,
             {"id": 1, "decision": 1, "confidence": 1, "created_at": 1, "_id": 0},
         ).sort("created_at", -1).limit(5)
     )
@@ -648,11 +913,13 @@ def dashboard(
     ]
 
     total_chunks_agg = list(db.documents.aggregate([
+        {"$match": document_scope},
         {"$group": {"_id": None, "total_chunks": {"$sum": {"$ifNull": ["$chunks", 0]}}}},
     ]))
     total_chunks = int(total_chunks_agg[0]["total_chunks"] or 0) if total_chunks_agg else 0
 
     avg_indexing_time_agg = list(db.documents.aggregate([
+        {"$match": document_scope},
         {"$group": {"_id": None, "avg_indexing_time": {"$avg": {"$ifNull": ["$processing_time_seconds", 0]}}}},
     ]))
     avg_indexing_time = float(avg_indexing_time_agg[0]["avg_indexing_time"] or 0.0) if avg_indexing_time_agg else 0.0
@@ -694,6 +961,11 @@ def dashboard(
             "llm": "configured",
             "database": "connected",
         },
+        "monitoring": (
+            build_monitoring_snapshot(db)
+            if "monitoring:read" in get_role_permissions(current_user.get("role"))
+            else None
+        ),
         "recent_documents": recent_documents,
         "recent_claims": recent_claims,
     }
@@ -704,6 +976,7 @@ def analytics(
     db = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
+    require_permission(current_user, "analytics:read")
     categories = {
         row["_id"] or "unknown": row["count"]
         for row in db.documents.aggregate([{"$group": {"_id": "$category", "count": {"$sum": 1}}}])
@@ -746,7 +1019,9 @@ def analytics(
             details = log.get("details")
             if not details:
                 continue
-            if isinstance(details, str) and details.startswith("Asked:"):
+            if isinstance(details, dict):
+                question = str(details.get("query") or "").strip()
+            elif isinstance(details, str) and details.startswith("Asked:"):
                 question = details.split("Asked:", 1)[1].strip()
             else:
                 question = str(details).strip()
@@ -785,8 +1060,8 @@ def notifications(
     db = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    recent_documents = list(db.documents.find().sort("created_at", -1).limit(5))
-    recent_claims = list(db.claim_analyses.find().sort("created_at", -1).limit(5))
+    recent_documents = list(db.documents.find(owner_scoped_query(current_user)).sort("created_at", -1).limit(5))
+    recent_claims = list(db.claim_analyses.find(owner_scoped_query(current_user, owner_field="created_by")).sort("created_at", -1).limit(5))
     items = [
         {
             "id": f"document-{doc.get('id')}",
@@ -810,6 +1085,7 @@ def notifications(
 
 @app.get("/settings")
 def settings(current_user = Depends(get_current_user)):
+    require_permission(current_user, "settings:edit")
     return {
         "security": {
             "authentication": "JWT",
@@ -838,12 +1114,15 @@ def admin_overview(
     db = Depends(get_db),
     current_user = Depends(get_current_user),
 ):
-    if current_user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin role required")
+    require_any_permission(current_user, ["admin:read", "audit:read", "monitoring:read"])
+    is_admin = normalize_role(current_user.get("role")) == "admin"
 
-    users = list(db.users.find({}, {"_id": 0}).sort("created_at", -1).limit(50))
+    users = list(db.users.find({}, {"_id": 0}).sort("created_at", -1).limit(50)) if is_admin else []
     audit_logs = list(db.audit_logs.find({}, {"_id": 0}).sort("created_at", -1).limit(10))
+    monitoring = build_monitoring_snapshot(db)
     return {
+        "monitoring": monitoring,
+        "can_manage_users": is_admin,
         "users": [
             {
                 "id": user.get("id"),
@@ -860,7 +1139,7 @@ def admin_overview(
                 "actor": log.get("actor"),
                 "actor_role": log.get("actor_role"),
                 "action": log.get("action"),
-                "details": log.get("details"),
+                "details": format_details(log.get("details")),
                 "created_at": format_datetime(log.get("created_at")),
             }
             for log in audit_logs
@@ -877,6 +1156,38 @@ def admin_overview(
     }
 
 
+@app.get("/admin/monitoring")
+def admin_monitoring(
+    db = Depends(get_db),
+    current_user = Depends(get_current_user),
+):
+    require_permission(current_user, "monitoring:read")
+    return build_monitoring_snapshot(db)
+
+
+@app.get("/admin/audit-logs")
+def admin_audit_logs(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    db = Depends(get_db),
+    current_user = Depends(get_current_user),
+):
+    require_permission(current_user, "audit:read")
+    total = db.audit_logs.count_documents({})
+    logs = list(db.audit_logs.find({}, {"_id": 0}).sort("created_at", -1).skip(offset).limit(limit))
+    return {
+        "logs": [
+            {
+                **log,
+                "details": format_details(log.get("details")),
+                "created_at": format_datetime(log.get("created_at")),
+            }
+            for log in logs
+        ],
+        "pagination": {"total": total, "limit": limit, "offset": offset},
+    }
+
+
 @app.get("/claims")
 def list_claims(
     limit: int = Query(50, ge=1, le=200),
@@ -884,22 +1195,13 @@ def list_claims(
     db = Depends(get_db),
     current_user = Depends(get_current_user),
 ):
-    total = db.claim_analyses.count_documents({})
-    claims = list(db.claim_analyses.find().sort("created_at", -1).skip(offset).limit(limit))
+    require_permission(current_user, "claims:read")
+    query = owner_scoped_query(current_user, owner_field="created_by")
+    total = db.claim_analyses.count_documents(query)
+    claims = list(db.claim_analyses.find(query).sort("created_at", -1).skip(offset).limit(limit))
     return {
         "claims": [
-            {
-                "id": claim.get("id"),
-                "question": claim.get("question"),
-                "decision": claim.get("decision"),
-                "confidence": claim.get("confidence"),
-                "rationale": claim.get("rationale"),
-                "missing_information": claim.get("missing_information"),
-                "explanation_trail": claim.get("explanation_trail"),
-                "evidence_summary": claim.get("evidence_summary"),
-                "created_by": claim.get("created_by"),
-                "created_at": format_datetime(claim.get("created_at")),
-            }
+            serialize_claim_analysis(claim)
             for claim in claims
         ],
         "pagination": {"total": total, "limit": limit, "offset": offset},
@@ -912,31 +1214,37 @@ def get_claim(
     db = Depends(get_db),
     current_user = Depends(get_current_user),
 ):
+    require_permission(current_user, "claims:read")
     claim = db.claim_analyses.find_one({"id": claim_id})
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found")
+    if not can_view_all_records(current_user) and claim.get("created_by") != current_user["username"]:
+        raise HTTPException(status_code=403, detail="You can only access your own claims")
 
-    return {
-        "id": claim.get("id"),
-        "question": claim.get("question"),
-        "decision": claim.get("decision"),
-        "confidence": claim.get("confidence"),
-        "rationale": claim.get("rationale"),
-        "missing_information": claim.get("missing_information"),
-        "explanation_trail": claim.get("explanation_trail"),
-        "evidence_summary": claim.get("evidence_summary"),
-        "sources": claim.get("sources", []),
-        "created_by": claim.get("created_by"),
-        "created_at": format_datetime(claim.get("created_at")),
-    }
+    return serialize_claim_analysis(claim, include_sources=True)
 
 
 @app.post("/chat")
 def chat(request: ChatRequest, db = Depends(get_db), current_user = Depends(get_current_user)):
+    require_permission(current_user, "chat:ask")
+    started_at = time.perf_counter()
 
     try:
 
         result = agent.ask_with_metrics(request.question)
+        duration_ms = (time.perf_counter() - started_at) * 1000
+        record_metric_event(
+            db,
+            "rag_query",
+            status="success" if not result.get("error") else "failed",
+            duration_ms=duration_ms,
+            details={
+                "retrieval_ms": result.get("retrieval_ms", 0),
+                "generation_ms": result.get("generation_ms", 0),
+                "confidence": result.get("confidence", "medium"),
+                "source_count": len(result.get("sources", [])),
+            },
+        )
         log_audit_event(
             db,
             actor=current_user["username"],
@@ -944,7 +1252,11 @@ def chat(request: ChatRequest, db = Depends(get_db), current_user = Depends(get_
             action="ask_chat",
             target_type="chat",
             target_id="",
-            details=f"Asked: {request.question[:120]}",
+            details={
+                "query": request.question[:500],
+                "retrieved_sections": result.get("sources", []),
+                "confidence": result.get("confidence", "medium"),
+            },
         )
 
         return {
@@ -957,6 +1269,13 @@ def chat(request: ChatRequest, db = Depends(get_db), current_user = Depends(get_
         }
 
     except Exception as e:
+        record_metric_event(
+            db,
+            "rag_query",
+            status="failed",
+            duration_ms=(time.perf_counter() - started_at) * 1000,
+            details={"error": str(e)},
+        )
 
         raise HTTPException(
             status_code=500,
@@ -966,6 +1285,7 @@ def chat(request: ChatRequest, db = Depends(get_db), current_user = Depends(get_
 
 @app.post("/debug/retrieve")
 def debug_retrieve(request: ChatRequest, current_user = Depends(get_current_user)):
+    require_permission(current_user, "admin:read")
     try:
         documents = retrieve_documents(request.question)
         return {
@@ -1008,6 +1328,7 @@ def reindex_document(
     db = Depends(get_db),
     current_user = Depends(get_current_user),
 ):
+    require_permission(current_user, "documents:reindex")
     document = db.documents.find_one({"id": document_id})
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -1024,17 +1345,31 @@ def reindex_document(
             document_id=document_id,
             filename=document.get("filename"),
         )
+        summary_result = (
+            generate_policy_summary(document)
+            if document.get("document_type") == "policy"
+            else None
+        )
+    update_fields = {
+        "status": "indexed",
+        "pages": index_result.get("pages", 0),
+        "chunks": index_result.get("chunks", 0),
+        "word_count": index_result.get("word_count", 0),
+        "processing_time_seconds": index_result.get("processing_time_seconds", 0),
+        "updated_at": datetime.utcnow(),
+    }
+    if summary_result:
+        update_fields.update(
+            {
+                "policy_summary": summary_result.get("summary"),
+                "summary_status": summary_result.get("summary_status"),
+                "summary_error": summary_result.get("summary_error"),
+                "summary_generated_at": summary_result.get("summary_generated_at"),
+            }
+        )
     db.documents.update_one(
         {"id": document_id},
-        {
-            "$set": {
-                "status": "indexed",
-                "pages": index_result.get("pages", 0),
-                "chunks": index_result.get("chunks", 0),
-                "word_count": index_result.get("word_count", 0),
-                "processing_time_seconds": index_result.get("processing_time_seconds", 0),
-            }
-        },
+        {"$set": update_fields},
     )
 
     return {
@@ -1043,6 +1378,47 @@ def reindex_document(
         "chunks": index_result["chunks"],
         "word_count": index_result.get("word_count", 0),
         "processing_time_seconds": index_result.get("processing_time_seconds", 0),
+        "policy_summary": summary_result.get("summary") if summary_result else "",
+        "summary_status": summary_result.get("summary_status") if summary_result else None,
+    }
+
+
+@app.post("/document/{document_id}/summary")
+def regenerate_policy_summary(
+    document_id: int,
+    db = Depends(get_db),
+    current_user = Depends(get_current_user),
+):
+    require_permission(current_user, "documents:reindex")
+    document = db.documents.find_one({"id": document_id})
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if document.get("document_type") != "policy":
+        raise HTTPException(status_code=400, detail="Automatic summaries are available for policy documents only.")
+
+    db.documents.update_one(
+        {"id": document_id},
+        {"$set": {"summary_status": "generating", "updated_at": datetime.utcnow()}},
+    )
+    summary_result = generate_policy_summary(document)
+    db.documents.update_one(
+        {"id": document_id},
+        {
+            "$set": {
+                "policy_summary": summary_result.get("summary"),
+                "summary_status": summary_result.get("summary_status"),
+                "summary_error": summary_result.get("summary_error"),
+                "summary_generated_at": summary_result.get("summary_generated_at"),
+                "updated_at": datetime.utcnow(),
+            }
+        },
+    )
+    return {
+        "document_id": document_id,
+        "policy_summary": summary_result.get("summary"),
+        "summary_status": summary_result.get("summary_status"),
+        "summary_error": summary_result.get("summary_error"),
+        "summary_generated_at": format_datetime(summary_result.get("summary_generated_at")),
     }
 
 
@@ -1052,7 +1428,14 @@ def claim_analyze(
     db = Depends(get_db),
     current_user = Depends(get_current_user),
 ):
+    require_permission(current_user, "claims:analyze")
+    started_at = time.perf_counter()
     try:
+        policy_document, claim_documents, uploaded_document_types = resolve_claim_documents(
+            db,
+            request,
+            current_user,
+        )
         structured_question = request.question or request.treatment_details or request.diagnosis or "claim coverage assessment"
         if request.treatment_details:
             structured_question = f"{request.treatment_details}. Diagnosis: {request.diagnosis or 'not provided'}. Hospital: {request.hospital_name or 'not provided'}. Admission date: {request.admission_date or 'not provided'}."
@@ -1060,7 +1443,10 @@ def claim_analyze(
         result = analyze_claim(
             question=structured_question,
             claim_amount=request.claim_amount or request.bill_amount,
-            policy_category=request.policy_category,
+            policy_category=request.policy_category or (policy_document or {}).get("category"),
+            policy_document_id=(policy_document or {}).get("id"),
+            claim_document_ids=[document.get("id") for document in claim_documents],
+            uploaded_document_types=uploaded_document_types,
         )
 
         evidence_summary = "; ".join(result.get("covered_items", []) + result.get("exclusions", [])) or "No structured evidence extracted"
@@ -1070,14 +1456,35 @@ def claim_analyze(
             "decision": result["decision"],
             "confidence": result["confidence"],
             "rationale": result["rationale"],
-            "missing_information": ", ".join(result.get("missing_information", [])),
+            "missing_information": result.get("missing_information", []),
             "explanation_trail": result.get("next_steps", []),
             "evidence_summary": evidence_summary,
             "sources": result.get("sources", []),
+            "document_checklist": result.get("document_checklist", {}),
+            "rag_evaluation": result.get("rag_evaluation", {}),
+            "policy_document_id": (policy_document or {}).get("id"),
+            "claim_document_ids": [document.get("id") for document in claim_documents],
             "created_by": current_user["username"],
             "created_at": datetime.utcnow(),
         }
         db.claim_analyses.insert_one(record)
+        record_metric_event(
+            db,
+            "claim_analysis",
+            status="success",
+            duration_ms=(time.perf_counter() - started_at) * 1000,
+            details={
+                "claim_id": record["id"],
+                "decision": result.get("decision"),
+                "confidence": result.get("confidence"),
+                "policy_document_id": record.get("policy_document_id"),
+                "claim_document_ids": record.get("claim_document_ids"),
+                "policy_source_count": result.get("rag_evaluation", {}).get("policy_source_count", 0),
+                "claim_source_count": result.get("rag_evaluation", {}).get("claim_source_count", 0),
+                "missing_documents": result.get("document_checklist", {}).get("missing_documents", []),
+                "rag_warnings": result.get("rag_evaluation", {}).get("warnings", []),
+            },
+        )
         log_audit_event(
             db,
             actor=current_user["username"],
@@ -1085,11 +1492,30 @@ def claim_analyze(
             action="analyze_claim",
             target_type="claim",
             target_id=str(record["id"]),
-            details=f"Claim decision {result['decision']} with {result['confidence']} confidence",
+            details={
+                "query": structured_question,
+                "policy_category": request.policy_category,
+                "policy_document_id": record.get("policy_document_id"),
+                "claim_document_ids": record.get("claim_document_ids"),
+                "retrieved_sections": result.get("sources", []),
+                "result": result.get("decision"),
+                "confidence": result.get("confidence"),
+                "missing_documents": result.get("document_checklist", {}).get("missing_documents", []),
+                "rag_evaluation": result.get("rag_evaluation", {}),
+            },
         )
 
         return result
+    except HTTPException:
+        raise
     except Exception as e:
+        record_metric_event(
+            db,
+            "claim_analysis",
+            status="failed",
+            duration_ms=(time.perf_counter() - started_at) * 1000,
+            details={"error": str(e)},
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1102,6 +1528,7 @@ def upload_document(
     db = Depends(get_db),
     current_user = Depends(get_current_user),
 ):
+    require_permission(current_user, "documents:upload")
     if upload_type not in UPLOAD_TYPES:
         raise HTTPException(status_code=404, detail="Upload endpoint not found")
 

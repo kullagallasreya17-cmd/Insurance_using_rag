@@ -1,5 +1,6 @@
 from langchain_core.documents import Document
 
+import claim_engine
 from rag import generator, retriever
 
 
@@ -64,6 +65,9 @@ def install_fake_rag(monkeypatch, docs_with_scores):
     monkeypatch.setattr(retriever, "get_mongo_collection", lambda: FakeCollection(records))
     monkeypatch.setattr(retriever, "get_mongo_vector_store", lambda: FakeVectorStore(docs_with_scores))
     monkeypatch.setattr(retriever, "RAG_SIMILARITY_THRESHOLD", 0.15)
+    monkeypatch.setattr(retriever, "RAG_RERANK_ENABLED", True)
+    monkeypatch.setattr(retriever, "RAG_RERANK_STRATEGY", "lexical")
+    monkeypatch.setattr(retriever, "RAG_RERANK_VECTOR_WEIGHT", 0.65)
     monkeypatch.setattr(generator, "RAG_SIMILARITY_THRESHOLD", 0.15)
 
 
@@ -115,6 +119,33 @@ def test_vehicle_policy_cover_uses_vehicle_category(monkeypatch):
     assert [doc.metadata["filename"] for doc in docs] == ["Vehicle_Policy.pdf"]
 
 
+def test_reranker_promotes_more_query_specific_chunk(monkeypatch):
+    broad_cover = make_doc(
+        "/docs/Vehicle_Policy.pdf",
+        "Vehicle_Policy.pdf",
+        "vehicle_policy",
+        "Vehicle policy coverage includes collision fire theft and accidental damage.",
+        0.9,
+        chunk_id=1,
+    )
+    claim_documents = make_doc(
+        "/docs/Vehicle_Policy.pdf",
+        "Vehicle_Policy.pdf",
+        "vehicle_policy",
+        "Vehicle claim required documents include RC driving licence policy copy repair estimate and FIR.",
+        0.4,
+        chunk_id=2,
+    )
+    install_fake_rag(monkeypatch, [broad_cover, claim_documents])
+    monkeypatch.setattr(retriever, "RAG_RERANK_VECTOR_WEIGHT", 0.0)
+
+    docs = retriever.retrieve_documents("What documents are required for a vehicle claim?")
+
+    assert docs[0].metadata["chunk_id"] == 2
+    assert docs[0].metadata["rerank_strategy"] == "lexical"
+    assert docs[0].metadata["rerank_score"] > docs[0].metadata["vector_score"]
+
+
 def test_vehicle_policy_exclusions_do_not_include_health_policy(monkeypatch):
     health = make_doc("/docs/Health_Policy.pdf", "Health_Policy.pdf", "health_policy", "Pre-existing disease waiting period exclusion.", 0.92)
     vehicle = make_doc("/docs/Vehicle_Policy.pdf", "Vehicle_Policy.pdf", "vehicle_policy", "Exclusions include wear and tear and driving without license.", 0.37)
@@ -156,3 +187,37 @@ def test_compare_vehicle_and_health_allows_both_documents(monkeypatch):
     docs = retriever.retrieve_documents("Compare the vehicle policy and health policy")
 
     assert {doc.metadata["filename"] for doc in docs} == {"Vehicle_Policy.pdf", "Health_Policy.pdf"}
+
+
+def test_highest_coverage_question_keeps_policy_citations_separate(monkeypatch):
+    health_high = make_doc(
+        "/docs/Health_Policy.pdf",
+        "Health_Policy.pdf",
+        "health_policy",
+        "Health policy coverage limit is 500000 for hospitalization.",
+        0.92,
+        chunk_id=1,
+    )
+    health_extra = make_doc(
+        "/docs/Health_Policy.pdf",
+        "Health_Policy.pdf",
+        "health_policy",
+        "Health policy room rent and ambulance coverage details.",
+        0.88,
+        chunk_id=2,
+    )
+    vehicle = make_doc(
+        "/docs/Vehicle_Policy.pdf",
+        "Vehicle_Policy.pdf",
+        "vehicle_policy",
+        "Vehicle policy coverage limit is 300000 for accident repair.",
+        0.35,
+        chunk_id=1,
+    )
+    install_fake_rag(monkeypatch, [health_high, health_extra, vehicle])
+
+    docs = retriever.retrieve_documents("Which policy has the highest coverage?")
+    citations = claim_engine.build_document_citations(docs)
+
+    assert {doc.metadata["filename"] for doc in docs} == {"Health_Policy.pdf", "Vehicle_Policy.pdf"}
+    assert {citation["filename"] for citation in citations} == {"Health_Policy.pdf", "Vehicle_Policy.pdf"}

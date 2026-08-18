@@ -121,6 +121,17 @@ function Policies() {
     }
   };
 
+  const regenerateSummary = async (id) => {
+    try {
+      await api.post(`/document/${id}/summary`);
+      const resp = await api.get("/policies");
+      setPolicies(resp.data.policies || []);
+    } catch (err) {
+      console.error("Summary generation failed", err);
+      alert("Failed to generate policy summary.");
+    }
+  };
+
   const deletePolicy = async (id) => {
     if (!window.confirm("Delete this policy? This action cannot be undone.")) return;
     try {
@@ -178,6 +189,12 @@ function Policies() {
             <p><strong>Version</strong><br />{policy.version || 1}</p>
             <p><strong>Uploaded</strong><br />{formatDate(policy.created_at)}</p>
             <p><strong>Indexed</strong><br />{policy.status}</p>
+            <p>
+              <strong>AI Summary</strong><br />
+              {policy.summary_status === "generating"
+                ? "Generating summary..."
+                : policy.policy_summary || "Summary will appear after indexing completes."}
+            </p>
             <div className="card-actions" style={{ marginTop: "16px", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               <button className="table-action-button" onClick={() => viewPolicy(policy.id, policy.name)}>View</button>
               <button className="table-action-button secondary" onClick={() => downloadPolicy(policy.id, policy.name)}>Download</button>
