@@ -45,7 +45,7 @@ MONGO_TEXT_KEY = os.getenv(
 
 MONGO_EMBEDDING_KEY = os.getenv(
     "MONGO_EMBEDDING_KEY",
-    "vectorContent"
+    "embedding"
 )
 
 MONGO_INDEX_NAME = os.getenv(
