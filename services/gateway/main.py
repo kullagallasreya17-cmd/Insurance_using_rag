@@ -23,6 +23,7 @@ AUTH_URL = os.getenv("AUTH_SERVICE_URL", BACKEND_URL)
 DOCUMENTS_URL = os.getenv("DOCUMENTS_SERVICE_URL", "http://documents:8000")
 RAG_URL = os.getenv("RAG_SERVICE_URL", "http://rag:8000")
 AI_URL = os.getenv("AI_SERVICE_URL", "http://ai:8000")
+UPSTREAM_TIMEOUT_SECONDS = float(os.getenv("GATEWAY_UPSTREAM_TIMEOUT_SECONDS", "90"))
 
 LOCAL_SERVICE_FALLBACKS = {
     "localhost": "http://127.0.0.1:8000",
@@ -40,9 +41,10 @@ def upstream_candidates(base_url: str) -> list[str]:
 
 
 async def proxy_json(method: str, base_url: str, path: str, **kwargs):
+    timeout_seconds = float(kwargs.pop("timeout_seconds", UPSTREAM_TIMEOUT_SECONDS))
     clean_kwargs = {key: value for key, value in kwargs.items() if value is not None}
     upstream_errors: list[str] = []
-    async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
+    async with httpx.AsyncClient(timeout=timeout_seconds, trust_env=False) as client:
         for candidate in upstream_candidates(base_url):
             url = f"{candidate}{path}"
             try:
@@ -50,6 +52,10 @@ async def proxy_json(method: str, base_url: str, path: str, **kwargs):
                 response = await client.request(method, url, **clean_kwargs)
                 logging.debug("Gateway upstream response %s %s %s", method, url, response.status_code)
                 break
+            except httpx.TimeoutException as exc:
+                error_message = f"{url}: upstream timed out after {timeout_seconds:g}s"
+                logging.error("Gateway upstream timeout: %s (%s)", error_message, type(exc).__name__)
+                raise HTTPException(status_code=504, detail=error_message) from exc
             except httpx.RequestError as exc:
                 error_message = f"{url}: {exc}"
                 logging.error("Gateway upstream request failed: %s", error_message)
@@ -262,13 +268,27 @@ async def rag_index(payload: dict):
 @app.post("/chat")
 async def chat(payload: dict, request: Request):
     headers = _get_auth_headers(request)
-    return await proxy_json("POST", BACKEND_URL, "/chat", json=payload, headers=headers)
+    return await proxy_json(
+        "POST",
+        BACKEND_URL,
+        "/chat",
+        json=payload,
+        headers=headers,
+        timeout_seconds=float(os.getenv("CHAT_UPSTREAM_TIMEOUT_SECONDS", "90")),
+    )
 
 
 @app.post("/claim/analyze")
 async def claim_analyze(payload: dict, request: Request):
     headers = _get_auth_headers(request)
-    return await proxy_json("POST", BACKEND_URL, "/claim/analyze", json=payload, headers=headers)
+    return await proxy_json(
+        "POST",
+        BACKEND_URL,
+        "/claim/analyze",
+        json=payload,
+        headers=headers,
+        timeout_seconds=float(os.getenv("CLAIM_UPSTREAM_TIMEOUT_SECONDS", "90")),
+    )
 
 
 @app.get("/claims")

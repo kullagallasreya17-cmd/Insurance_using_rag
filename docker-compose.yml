@@ -4,6 +4,9 @@ services:
     ports:
       - "8000:8000"
     environment:
+      GATEWAY_UPSTREAM_TIMEOUT_SECONDS: 90
+      CHAT_UPSTREAM_TIMEOUT_SECONDS: 90
+      CLAIM_UPSTREAM_TIMEOUT_SECONDS: 90
       AUTH_SERVICE_URL: http://backend:8000
       DOCUMENTS_SERVICE_URL: http://documents:8000
       RAG_SERVICE_URL: http://rag:8000
