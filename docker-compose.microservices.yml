@@ -39,8 +39,6 @@ services:
       INDEXING_BACKEND: mongo
       CACHE_BACKEND: mongo
       STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
-      S3_BUCKET: ${S3_BUCKET:-}
-      S3_PREFIX: ${S3_PREFIX:-insurance-documents}
     volumes:
       - backend_documents:/app/documents
 

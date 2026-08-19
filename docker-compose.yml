@@ -92,11 +92,15 @@ services:
       INDEXING_BACKEND: rq
       CACHE_BACKEND: mongo
       REDIS_URL: redis://redis:6379/0
+      # WEB_SEARCH_API_KEY is loaded securely from backend/.env via env_file.
+      WEB_SEARCH_PROVIDER: ${WEB_SEARCH_PROVIDER:-tavily}
+      WEB_SEARCH_MAX_RESULTS: ${WEB_SEARCH_MAX_RESULTS:-5}
+      WEB_SEARCH_TIMEOUT_SECONDS: ${WEB_SEARCH_TIMEOUT_SECONDS:-8}
+      WEB_SEARCH_RETRIES: ${WEB_SEARCH_RETRIES:-1}
+      WEB_SEARCH_DEPTH: ${WEB_SEARCH_DEPTH:-basic}
       STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
-      S3_BUCKET: ${S3_BUCKET:-}
-      S3_PREFIX: ${S3_PREFIX:-insurance-documents}
       WEB_CONCURRENCY: 1
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://18.218.23.226:5173}
     volumes:
       - backend_documents:/app/documents
     healthcheck:

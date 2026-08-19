@@ -49,12 +49,10 @@ See [ENTERPRISE_ARCHITECTURE.md](ENTERPRISE_ARCHITECTURE.md) for the microservic
 
 ## Scalable Docker Run
 
-Create a local `.env` from `.env.example`, set `MONGO_URI` for MongoDB Atlas, and use S3-compatible object storage in production:
+Create a local `.env` from `.env.example`, set `MONGO_URI` for MongoDB Atlas, and use local document storage:
 
 ```text
-STORAGE_BACKEND=s3
-S3_BUCKET=your-bucket-name
-S3_PREFIX=insurance-documents
+STORAGE_BACKEND=local
 ```
 
 Then run:
@@ -86,4 +84,4 @@ cd backend
 .venv\Scripts\python.exe -m pytest tests/test_web_search_agent.py -q
 ```
 
-The Docker setup runs API replicas with MongoDB-backed durable indexing jobs, MongoDB-backed cache/presence state, and MongoDB Atlas Vector Search. For multi-node/cloud deployments, use `STORAGE_BACKEND=s3` so every replica can read uploaded documents from shared object storage.
+The Docker setup runs API replicas with MongoDB-backed durable indexing jobs, MongoDB-backed cache/presence state, and MongoDB Atlas Vector Search.
