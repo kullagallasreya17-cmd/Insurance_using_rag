@@ -25,7 +25,7 @@ load_dotenv(dotenv_path)
 
 MONGO_URI = os.getenv(
     "MONGO_URI",
-    "mongodb://localhost:27017"
+    ""
 )
 
 MONGO_DB = os.getenv(
@@ -70,7 +70,11 @@ def get_mongo_client() -> MongoClient:
     """
     Create MongoDB client.
     """
-    return MongoClient(MONGO_URI)
+    if not MONGO_URI:
+        raise RuntimeError(
+            "MONGO_URI is not configured. Set it in backend/.env or the process environment."
+        )
+    return MongoClient(MONGO_URI, serverSelectionTimeoutMS=10000)
 
 
 def get_mongo_collection() -> Collection:
@@ -85,6 +89,33 @@ def get_mongo_collection() -> Collection:
 # ============================================================
 # ATLAS VECTOR SEARCH INDEX
 # ============================================================
+
+def _atlas_index_fields(index_definition: dict | None) -> list[dict]:
+    if not index_definition:
+        return []
+    return index_definition.get("fields", []) or []
+
+
+def _atlas_index_has_required_filters(index_definition: dict | None) -> bool:
+    required_paths = {"category", "document_type", "document_id", "source"}
+    fields = _atlas_index_fields(index_definition)
+
+    if not fields:
+        return False
+
+    filter_paths = {
+        field.get("path")
+        for field in fields
+        if field.get("type") == "filter" and field.get("path")
+    }
+    vector_paths = {
+        field.get("path")
+        for field in fields
+        if field.get("type") == "vector" and field.get("path")
+    }
+
+    return bool(required_paths.issubset(filter_paths) and MONGO_EMBEDDING_KEY in vector_paths)
+
 
 def create_atlas_vector_search_index() -> None:
     """
@@ -104,8 +135,6 @@ def create_atlas_vector_search_index() -> None:
                 "numDimensions": EMBEDDING_DIM,
                 "similarity": "cosine",
             },
-
-            # Fields that may be used for filtering.
             {
                 "type": "filter",
                 "path": "document_id",
@@ -118,8 +147,36 @@ def create_atlas_vector_search_index() -> None:
                 "type": "filter",
                 "path": "category",
             },
+            {
+                "type": "filter",
+                "path": "source",
+            },
         ]
     }
+
+    try:
+        for index in collection.list_search_indexes():
+            if index.get("name") == MONGO_INDEX_NAME:
+                definition = index.get("latestDefinition") or index.get("definition") or {}
+                if _atlas_index_has_required_filters(definition):
+                    logging.info(
+                        "Atlas Vector Search index is valid and ready: %s",
+                        MONGO_INDEX_NAME,
+                    )
+                    return
+
+                logging.warning(
+                    "Atlas Vector Search index %s is stale; rebuilding with filterable metadata fields.",
+                    MONGO_INDEX_NAME,
+                )
+                try:
+                    collection.drop_search_index(MONGO_INDEX_NAME)
+                    logging.info("Dropped stale Atlas Vector Search index: %s", MONGO_INDEX_NAME)
+                except Exception as exc:
+                    logging.warning("Could not drop stale Atlas Vector Search index %s: %s", MONGO_INDEX_NAME, exc)
+                break
+    except Exception as exc:
+        logging.warning("Could not inspect Atlas Vector Search indexes before recreate: %s", exc)
 
     index_model = SearchIndexModel(
         definition=index_definition,
@@ -150,15 +207,21 @@ def atlas_index_exists() -> bool:
     collection = get_mongo_collection()
 
     try:
-        indexes = collection.list_search_indexes()
-
-        for index in indexes:
+        for index in collection.list_search_indexes():
             if index.get("name") == MONGO_INDEX_NAME:
-                logging.info(
-                    "Atlas Vector Search index exists: %s",
-                    MONGO_INDEX_NAME,
-                )
-                return True
+                definition = index.get("latestDefinition") or index.get("definition") or {}
+                is_valid = _atlas_index_has_required_filters(definition)
+                if is_valid:
+                    logging.info(
+                        "Atlas Vector Search index exists and is valid: %s",
+                        MONGO_INDEX_NAME,
+                    )
+                else:
+                    logging.warning(
+                        "Atlas Vector Search index exists but is missing required filter fields: %s",
+                        MONGO_INDEX_NAME,
+                    )
+                return is_valid
 
         logging.warning(
             "Atlas Vector Search index does not exist: %s",
