@@ -2,10 +2,15 @@
 
 import logging
 import os
+from pathlib import Path
 import time
 from datetime import datetime, timezone
 
 import httpx
+from dotenv import load_dotenv
+
+
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 
 logger = logging.getLogger(__name__)

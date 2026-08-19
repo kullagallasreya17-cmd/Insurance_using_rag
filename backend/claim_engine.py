@@ -490,9 +490,12 @@ def analyze_claim(
         "eligible_amount": round(eligible, 2),
     }
 
+    # Preserve the submitted hospital name even when the LLM omits it.
+    submitted_hospital_name = hospital_name
+
     # Hospital network verification: use local data file, otherwise UNKNOWN
     hospital_networks = _load_hospital_networks()
-    hospital_name = parsed.get("hospital_name") or None
+    hospital_name = parsed.get("hospital_name") or submitted_hospital_name or None
     if not hospital_name:
         # try to find in question text or documents
         hospital_name = None
