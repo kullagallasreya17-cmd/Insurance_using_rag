@@ -8,10 +8,10 @@ def test_admin_permissions_include_admin_actions():
     assert "dashboard:read" in permissions
 
 
-def test_legacy_roles_are_treated_as_admin_access():
+def test_removed_roles_fall_back_to_customer_access():
     permissions = get_role_permissions("agent")
     assert "documents:upload" in permissions
-    assert "settings:edit" in permissions
+    assert "settings:edit" not in permissions
 
 
 def test_default_permissions_cover_base_access():

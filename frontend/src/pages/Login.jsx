@@ -87,8 +87,6 @@ function Login() {
           Role
           <select value={selectedRole} onChange={(event) => setSelectedRole(event.target.value)}>
             <option value="customer">Customer</option>
-            <option value="agent">Agent</option>
-            <option value="analyst">Analyst</option>
             <option value="admin">Admin</option>
             <option value="auditor">Auditor</option>
           </select>

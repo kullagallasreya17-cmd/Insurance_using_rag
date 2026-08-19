@@ -9,18 +9,18 @@ function Sidebar() {
   const role = (user.role || "customer").toLowerCase();
 
   const menuItems = [
-    { name: "Dashboard", path: "/dashboard", icon: "DB", roles: ["admin", "agent", "analyst", "customer", "auditor"] },
-    { name: "Upload Policy", path: "/upload-policy", icon: "UP", roles: ["admin", "agent", "analyst", "customer"] },
-    { name: "Documents", path: "/documents", icon: "DC", roles: ["admin", "agent", "analyst", "customer", "auditor"] },
-    { name: "Policies", path: "/policies", icon: "PL", roles: ["admin", "agent", "analyst", "customer", "auditor"] },
-    { name: "AI Chatbot", path: "/chatbot", icon: "AI", roles: ["admin", "agent", "analyst", "customer"] },
-    { name: "Claim Analysis", path: "/claim-analysis", icon: "CA", roles: ["admin", "agent", "analyst", "customer"] },
+    { name: "Dashboard", path: "/dashboard", icon: "DB", roles: ["admin", "customer", "auditor"] },
+    { name: "Upload Policy", path: "/upload-policy", icon: "UP", roles: ["admin", "customer"] },
+    { name: "Documents", path: "/documents", icon: "DC", roles: ["admin", "customer", "auditor"] },
+    { name: "Policies", path: "/policies", icon: "PL", roles: ["admin", "customer", "auditor"] },
+    { name: "AI Chatbot", path: "/chatbot", icon: "AI", roles: ["admin", "customer"] },
+    { name: "Claim Analysis", path: "/claim-analysis", icon: "CA", roles: ["admin", "customer"] },
     { name: "Claims", path: "/claims", icon: "CL", roles: ["auditor"] },
-    { name: "Analytics", path: "/analytics", icon: "AN", roles: ["admin", "agent", "analyst", "auditor"] },
-    { name: "Notifications", path: "/notifications", icon: "NT", roles: ["admin", "agent", "analyst", "customer", "auditor"] },
-    { name: "Profile", path: "/profile", icon: "PR", roles: ["admin", "agent", "analyst", "customer", "auditor"] },
-    { name: "Settings", path: "/settings", icon: "ST", roles: ["admin", "agent", "analyst"] },
-    { name: "Admin", path: "/admin", icon: "AD", roles: ["admin", "agent", "analyst", "auditor"] },
+    { name: "Analytics", path: "/analytics", icon: "AN", roles: ["admin", "auditor"] },
+    { name: "Notifications", path: "/notifications", icon: "NT", roles: ["admin", "customer", "auditor"] },
+    { name: "Profile", path: "/profile", icon: "PR", roles: ["admin", "customer", "auditor"] },
+    { name: "Settings", path: "/settings", icon: "ST", roles: ["admin"] },
+    { name: "Admin", path: "/admin", icon: "AD", roles: ["admin", "auditor"] },
   ];
 
   const logout = () => {

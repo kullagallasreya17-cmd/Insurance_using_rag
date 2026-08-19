@@ -99,8 +99,6 @@ function Register() {
           Role
           <select value={form.role} onChange={(event) => updateForm("role", event.target.value)}>
             <option value="customer">Customer</option>
-            <option value="agent">Agent</option>
-            <option value="analyst">Analyst</option>
             <option value="admin">Admin</option>
             <option value="auditor">Auditor</option>
           </select>

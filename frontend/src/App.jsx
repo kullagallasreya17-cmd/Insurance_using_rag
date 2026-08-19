@@ -27,7 +27,7 @@ function App() {
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
         <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-        <Route path="/upload-policy" element={<ProtectedRoute requiredRoles={["admin", "customer", "agent", "analyst"]}><UploadPolicy /></ProtectedRoute>} />
+        <Route path="/upload-policy" element={<ProtectedRoute requiredRoles={["admin", "customer"]}><UploadPolicy /></ProtectedRoute>} />
         <Route path="/documents" element={<ProtectedRoute><Documents /></ProtectedRoute>} />
         <Route path="/policies" element={<ProtectedRoute><Policies /></ProtectedRoute>} />
         <Route path="/claim-analysis" element={<ProtectedRoute requiredRoles={["admin", "customer"]}><ClaimAnalysis /></ProtectedRoute>} />

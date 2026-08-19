@@ -69,8 +69,6 @@ KNOWLEDGE_CATEGORIES = [
 
 LEGACY_ROLE_ALIASES = {
     "admin": "admin",
-    "analyst": "admin",
-    "agent": "admin",
     "customer": "customer",
     "auditor": "auditor",
 }
