@@ -5,6 +5,7 @@ from typing import Optional
 
 from rag.generator import generate_claim_analysis
 from rag.retriever import RetrievalPlan, retrieve_documents_with_scores_expanded
+from web_research import search_hospital_cost
 
 
 def _parse_number(value) -> Optional[float]:
@@ -364,6 +365,9 @@ def analyze_claim(
     policy_document_id: int | None = None,
     claim_document_ids: list[int] | None = None,
     uploaded_document_types: list[str] | None = None,
+    hospital_name: str | None = None,
+    hospital_location: str | None = None,
+    enable_web_search: bool = True,
 ):
     documents, retrieval_results = _retrieve_claim_context(
         question,
@@ -380,7 +384,23 @@ def analyze_claim(
     if m:
         admission_date = m.group(1)
 
-    raw_answer = generate_claim_analysis(question, documents, claim_amount, policy_category, admission_date=admission_date)
+    web_research = {"enabled": False, "sources": [], "summary": ""}
+    if enable_web_search and hospital_name and not claim_document_ids:
+        web_research = search_hospital_cost(
+            question,
+            hospital_name,
+            hospital_location,
+            claim_amount=claim_amount,
+        )
+
+    raw_answer = generate_claim_analysis(
+        question,
+        documents,
+        claim_amount,
+        policy_category,
+        admission_date=admission_date,
+        external_context=web_research.get("summary", ""),
+    )
 
     try:
         parsed = parse_structured_claim_response(raw_answer)
@@ -480,6 +500,20 @@ def analyze_claim(
     if hospital_name:
         network_status = hospital_networks.get(hospital_name.strip().lower(), "UNKNOWN")
     parsed["hospital_network_status"] = network_status
+    parsed["hospital_research"] = {
+        "hospital_name": hospital_name,
+        "location": hospital_location,
+        "query": web_research.get("query"),
+        "sources": web_research.get("sources", []),
+        "summary": web_research.get("summary", ""),
+        "amount_assessment": web_research.get("amount_assessment"),
+        "disclaimer": web_research.get(
+            "disclaimer",
+            "Public web estimates are informational and must be verified with the hospital and insurer.",
+        ),
+    }
+    if web_research.get("enabled") and not web_research.get("sources"):
+        parsed.setdefault("missing_information", []).append("Verified hospital estimate or bill")
 
     # Add evidence summary if missing by summarizing retrieved citations
     if not parsed.get("evidence_summary"):

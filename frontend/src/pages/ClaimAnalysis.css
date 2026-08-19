@@ -126,6 +126,21 @@
     font-weight: 700;
 }
 
+.web-research-panel {
+    border-left: 4px solid #0f766e;
+    background: #f0fdfa;
+}
+
+.web-research-panel small {
+    display: block;
+    color: #64748b;
+    line-height: 1.5;
+}
+
+.web-research-panel a {
+    color: #0f766e;
+}
+
 .analyze-button {
     background: #2563eb;
     color: white;

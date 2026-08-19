@@ -28,8 +28,9 @@ from rag.mongo_indexer import MongoJobIndexer
 from rag.rq_indexer import RQJobIndexer
 from rag.indexer import extract_document_preview, index_document
 from rag.retriever import retrieve_documents
+from rag.web_search import web_search
 from rag.summarizer import generate_policy_summary
-from schemas import ChatRequest, ClaimRequest, LoginRequest, RegisterRequest
+from schemas import ChatRequest, ClaimRequest, LoginRequest, RegisterRequest, WebSearchRequest
 from storage import get_storage
 
 
@@ -1250,6 +1251,11 @@ def chat(request: ChatRequest, db = Depends(get_db), current_user = Depends(get_
                 "generation_ms": result.get("generation_ms", 0),
                 "confidence": result.get("confidence", "medium"),
                 "source_count": len(result.get("sources", [])),
+                "route": result.get("route"),
+                "web_search_used": result.get("web_search_used", False),
+                "web_result_count": len(result.get("web_sources", [])),
+                "web_provider": result.get("web_provider"),
+                "web_search_ok": result.get("web_search_ok", False),
             },
         )
         log_audit_event(
@@ -1263,6 +1269,9 @@ def chat(request: ChatRequest, db = Depends(get_db), current_user = Depends(get_
                 "query": request.question[:500],
                 "retrieved_sections": result.get("sources", []),
                 "confidence": result.get("confidence", "medium"),
+                "route": result.get("route"),
+                "web_search_used": result.get("web_search_used", False),
+                "web_result_count": len(result.get("web_sources", [])),
             },
         )
 
@@ -1273,6 +1282,12 @@ def chat(request: ChatRequest, db = Depends(get_db), current_user = Depends(get_
             "confidence": result.get("confidence", "medium"),
             "retrieval_ms": result.get("retrieval_ms", 0),
             "generation_ms": result.get("generation_ms", 0),
+            "route": result.get("route", "POLICY_ONLY"),
+            "web_search_used": result.get("web_search_used", False),
+            "web_search_ok": result.get("web_search_ok", False),
+            "web_search_error": result.get("web_search_error"),
+            "web_provider": result.get("web_provider"),
+            "web_sources": result.get("web_sources", []),
         }
 
     except Exception as e:
@@ -1288,6 +1303,13 @@ def chat(request: ChatRequest, db = Depends(get_db), current_user = Depends(get_
             status_code=500,
             detail=str(e)
         )
+
+
+@app.post("/api/search")
+def api_search(request: WebSearchRequest, current_user = Depends(get_current_user)):
+    require_permission(current_user, "chat:ask")
+    result = web_search(request.query, max_results=request.max_results)
+    return {"query": request.query, **result}
 
 
 @app.post("/debug/retrieve")
@@ -1454,6 +1476,9 @@ def claim_analyze(
             policy_document_id=(policy_document or {}).get("id"),
             claim_document_ids=[document.get("id") for document in claim_documents],
             uploaded_document_types=uploaded_document_types,
+            hospital_name=request.hospital_name,
+            hospital_location=request.hospital_location,
+            enable_web_search=request.enable_web_search,
         )
 
         evidence_summary = "; ".join(result.get("covered_items", []) + result.get("exclusions", [])) or "No structured evidence extracted"

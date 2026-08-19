@@ -384,6 +384,22 @@
   opacity: 0.8;
 }
 
+.source-indicator {
+  color: #475569;
+  font-size: 12px;
+  font-weight: 600;
+  margin: 6px 0;
+}
+
+.web-sources-panel {
+  border-left-color: #0F766E;
+  background: #F0FDFA;
+}
+
+.web-sources-panel a {
+  color: #0F766E;
+}
+
 .confidence-badge {
   display: inline-block;
   background: #F0FDF4;

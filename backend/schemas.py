@@ -5,11 +5,17 @@ class ChatRequest(BaseModel):
     question: str
 
 
+class WebSearchRequest(BaseModel):
+    query: str
+    max_results: int = Field(default=5, ge=1, le=10)
+
+
 class ClaimRequest(BaseModel):
     question: str = ""
     treatment_details: str | None = None
     diagnosis: str | None = None
     hospital_name: str | None = None
+    hospital_location: str | None = None
     admission_date: str | None = None
     claim_amount: float | None = None
     bill_amount: float | None = None
@@ -17,6 +23,7 @@ class ClaimRequest(BaseModel):
     policy_document_id: int | None = None
     claim_document_ids: list[int] = Field(default_factory=list)
     uploaded_document_types: list[str] = Field(default_factory=list)
+    enable_web_search: bool = True
 
 
 class LoginRequest(BaseModel):

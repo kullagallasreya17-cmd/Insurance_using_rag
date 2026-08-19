@@ -165,6 +165,9 @@ function ChatBox() {
         sender: "ai",
         text: response.data.answer,
         sources: response.data.sources || [],
+        route: response.data.route,
+        webSearchUsed: response.data.web_search_used,
+        webSources: response.data.web_sources || [],
         timestamp: new Date().toLocaleTimeString(),
         responseTime: parseFloat(responseTime),
       };
@@ -280,6 +283,16 @@ function ChatBox() {
         <div className="message-content">
           <p>{msg.text}</p>
 
+          {msg.route && (
+            <div className="source-indicator">
+              {msg.route === "POLICY_AND_WEB"
+                ? "📄 Policy + 🌐 Web"
+                : msg.route === "WEB_ONLY"
+                  ? "🌐 Web search used"
+                  : "📄 Policy documents used"}
+            </div>
+          )}
+
           {grouped.length > 0 && (
             <div className="sources-panel">
               <strong>📄 Sources:</strong>
@@ -292,6 +305,19 @@ function ChatBox() {
                         <small>Pages: {g.pages.join(", ")}</small>
                       </div>
                     )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {msg.webSources?.length > 0 && (
+            <div className="sources-panel web-sources-panel">
+              <strong>🌐 Web sources:</strong>
+              <ul>
+                {msg.webSources.map((source) => (
+                  <li key={source.url}>
+                    <a href={source.url} target="_blank" rel="noreferrer">{source.title || source.source}</a>
                   </li>
                 ))}
               </ul>

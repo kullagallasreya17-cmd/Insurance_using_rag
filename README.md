@@ -63,4 +63,27 @@ Then run:
 docker compose up --build --scale backend=3
 ```
 
+## Insurance AI Web Search Agent
+
+Chat requests are routed deterministically:
+
+- `POLICY_ONLY` uses the existing MongoDB Atlas policy RAG.
+- `WEB_ONLY` uses the configured Tavily search tool for current hospitals, treatments, and approximate costs.
+- `POLICY_AND_WEB` retrieves policy evidence and web evidence separately, then sends both labeled contexts to Gemini.
+
+Copy `.env.example` to `backend/.env` and configure `WEB_SEARCH_API_KEY`. The web tool is optional: when the key is missing, policy-only questions continue to use the existing RAG and web requests fail with a user-safe empty result. Web pages are treated as untrusted reference data and cannot override an explicit policy clause.
+
+The authenticated `POST /api/search` endpoint accepts:
+
+```json
+{"query": "What is the approximate cost of knee replacement surgery in Bangalore?", "max_results": 5}
+```
+
+Run the web-agent tests with:
+
+```powershell
+cd backend
+.venv\Scripts\python.exe -m pytest tests/test_web_search_agent.py -q
+```
+
 The Docker setup runs API replicas with MongoDB-backed durable indexing jobs, MongoDB-backed cache/presence state, and MongoDB Atlas Vector Search. For multi-node/cloud deployments, use `STORAGE_BACKEND=s3` so every replica can read uploaded documents from shared object storage.

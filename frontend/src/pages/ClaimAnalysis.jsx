@@ -13,6 +13,7 @@ function ClaimAnalysis() {
   const [question, setQuestion] = useState("");
   const [diagnosis, setDiagnosis] = useState("");
   const [hospitalName, setHospitalName] = useState("");
+  const [hospitalLocation, setHospitalLocation] = useState("");
   const [claimAmount, setClaimAmount] = useState("");
   const [policyCategory, setPolicyCategory] = useState("health_policy");
   const [documents, setDocuments] = useState([]);
@@ -78,10 +79,12 @@ function ClaimAnalysis() {
         treatment_details: question,
         diagnosis: diagnosis || "not provided",
         hospital_name: hospitalName || "not provided",
+        hospital_location: hospitalLocation || null,
         claim_amount: claimAmount ? Number(claimAmount) : null,
         policy_category: policyCategory,
         policy_document_id: selectedPolicyId ? Number(selectedPolicyId) : null,
         claim_document_ids: selectedClaimDocumentIds.map((id) => Number(id)),
+        enable_web_search: true,
       });
       setResult(response.data);
       await fetchClaims();
@@ -158,6 +161,16 @@ function ClaimAnalysis() {
                     placeholder="Enter claim amount"
                     value={claimAmount}
                     onChange={(event) => setClaimAmount(event.target.value)}
+                  />
+                </div>
+
+                <div className="field-group">
+                  <label className="field-label">Hospital location / city</label>
+                  <input
+                    type="text"
+                    placeholder="Example: Apollo Hospital, Chennai"
+                    value={hospitalLocation}
+                    onChange={(event) => setHospitalLocation(event.target.value)}
                   />
                 </div>
 
@@ -273,6 +286,29 @@ function ClaimAnalysis() {
                     <li><strong>Claim Evidence Sources:</strong> {result.rag_evaluation.claim_source_count || 0}</li>
                     <li><strong>Warnings:</strong> {(result.rag_evaluation.warnings || []).join(", ") || "None"}</li>
                   </ul>
+                </div>
+              )}
+
+              {result.hospital_research && (result.hospital_research.summary || result.hospital_research.sources?.length > 0) && (
+                <div className="section web-research-panel">
+                  <h3>Hospital Cost Research</h3>
+                  <p><strong>Hospital:</strong> {result.hospital_research.hospital_name || "Not provided"}</p>
+                  <p><strong>Location:</strong> {result.hospital_research.location || "Not provided"}</p>
+                  <p>{result.hospital_research.summary || "No public estimate found."}</p>
+                  {result.hospital_research.amount_assessment && (
+                    <p>
+                      <strong>Amount check:</strong>{" "}
+                      {result.hospital_research.amount_assessment.message}
+                    </p>
+                  )}
+                  <small>{result.hospital_research.disclaimer}</small>
+                  {result.hospital_research.sources?.length > 0 && (
+                    <ul>
+                      {result.hospital_research.sources.map((source) => (
+                        <li key={source.url}><a href={source.url} target="_blank" rel="noreferrer">{source.title}</a></li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
               )}
 
