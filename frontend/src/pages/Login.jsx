@@ -41,11 +41,6 @@ function Login() {
     }
   };
 
-  const handleForgotPassword = (event) => {
-    event.preventDefault();
-    setMessage("Please contact your administrator to reset your password.");
-  };
-
   return (
     <main className="login-page">
       <form className="login-panel" onSubmit={login}>
@@ -101,9 +96,7 @@ function Login() {
             />
             Remember Me
           </label>
-          <button className="text-link" onClick={handleForgotPassword}>
-            Forgot Password?
-          </button>
+          <Link className="text-link" to="/forgot-password">Forgot Password?</Link>
         </div>
 
         <button type="submit" disabled={loading} className="primary-button">

@@ -1,10 +1,13 @@
 import logging
+import hashlib
 import os
+import re
+import secrets
 import sys
 import time
 import traceback
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 import mimetypes
@@ -15,7 +18,7 @@ if sys.platform == "win32":
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, RedirectResponse
 
@@ -23,6 +26,7 @@ from auth import clear_active_user, create_access_token, get_current_user
 from agents.insurance_agent import InsuranceAgent
 from claim_engine import _retrieve_claim_context, analyze_claim, build_document_citations
 from database import get_database, get_db, init_db, get_next_id, hash_password, verify_password
+from email_service import send_reset_email, send_verification_email
 from rag.background_indexer import BackgroundIndexer
 from rag.mongo_indexer import MongoJobIndexer
 from rag.rq_indexer import RQJobIndexer
@@ -32,7 +36,7 @@ from rag.query_router import ClaimIntent, resolve_claim_intent
 from rag.web_search import web_search
 from rag.generator import generate_answer
 from rag.summarizer import generate_policy_summary
-from schemas import ChatRequest, ClaimRequest, LoginRequest, RegisterRequest, WebSearchRequest
+from schemas import ChatRequest, ClaimRequest, ForgotPasswordRequest, LoginRequest, RegisterRequest, ResetPasswordRequest, TokenRequest, WebSearchRequest
 from storage import get_storage
 
 
@@ -593,7 +597,7 @@ def health():
 @app.post("/auth/login")
 def login(request: LoginRequest, db = Depends(get_db)):
     requested_role = normalize_role(request.role)
-    user = db.users.find_one({"username": request.username})
+    user = db.users.find_one({"$or": [{"username": request.username}, {"email": request.username.lower().strip()}]})
     if not user:
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
@@ -603,7 +607,12 @@ def login(request: LoginRequest, db = Depends(get_db)):
     if not verify_password(request.password, user.get("hashed_password", "")):
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
-    token = create_access_token({"sub": user["username"], "role": normalize_role(user.get("role"))})
+    if not user.get("is_active", True):
+        raise HTTPException(status_code=403, detail="This account is inactive.")
+    if not user.get("email_verified", False):
+        raise HTTPException(status_code=403, detail="Please verify your email address before logging in.")
+
+    token = create_access_token({"sub": user["username"], "role": normalize_role(user.get("role")), "token_version": user.get("token_version", 0)})
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -611,38 +620,128 @@ def login(request: LoginRequest, db = Depends(get_db)):
             "username": user["username"],
             "full_name": user.get("full_name"),
             "role": normalize_role(user.get("role")),
+            "email": user.get("email"),
         },
     }
 
 
 @app.post("/auth/register")
 def register(request: RegisterRequest, db = Depends(get_db)):
+    email = request.email.lower().strip()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise HTTPException(status_code=422, detail="Enter a valid email address.")
+    if len(request.password) < 8:
+        raise HTTPException(status_code=422, detail="Password must be at least 8 characters long.")
     existing_user = db.users.find_one({"username": request.username})
     if existing_user:
         raise HTTPException(status_code=409, detail="Username already exists")
+    if db.users.find_one({"email": email}):
+        raise HTTPException(status_code=409, detail="Email address already exists")
 
     user_id = get_next_id("users")
     user = {
         "id": user_id,
         "username": request.username,
         "full_name": request.full_name,
-        "role": normalize_role(request.role),
+        "role": "customer",
         "hashed_password": hash_password(request.password),
+        "email": email,
+        "email_verified": False,
+        "is_active": True,
+        "token_version": 0,
         "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
     }
     db.users.insert_one(user)
-
-    normalized_role = normalize_role(user["role"])
-    token = create_access_token({"sub": user["username"], "role": normalized_role})
+    raw_token = secrets.token_urlsafe(32)
+    db.email_verification_tokens.insert_one({"id": get_next_id("email_verification_tokens"), "user_id": user_id, "token_hash": hashlib.sha256(raw_token.encode()).hexdigest(), "expires_at": datetime.utcnow() + timedelta(hours=24), "created_at": datetime.utcnow()})
+    try:
+        send_verification_email(email, raw_token)
+    except Exception as exc:
+        logging.error("Verification email delivery failed type=%s message=%s", type(exc).__name__, str(exc)[:200])
+        raise HTTPException(status_code=503, detail="Account created, but verification email could not be sent. Please try again later.") from exc
     return {
-        "access_token": token,
-        "token_type": "bearer",
+        "message": "Account created. Please verify your email address before logging in.",
         "user": {
             "username": user["username"],
             "full_name": user["full_name"],
-            "role": normalized_role,
+            "role": "customer",
+            "email": email,
+            "email_verified": False,
         },
     }
+
+
+def _rate_limit(db, request: Request, action: str, email: str) -> None:
+    try:
+        import redis
+        client = redis.Redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=1)
+        ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "unknown")
+        for key in (f"auth-rate:{action}:email:{hashlib.sha256(email.encode()).hexdigest()}", f"auth-rate:{action}:ip:{ip}"):
+            if client.incr(key) == 1:
+                client.expire(key, 60)
+            if int(client.get(key) or 0) > 5:
+                raise HTTPException(status_code=429, detail="Too many requests. Please try again later.")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logging.warning("Auth rate limiter unavailable type=%s", type(exc).__name__)
+
+
+@app.post("/auth/verify-email")
+def verify_email(request: TokenRequest, db = Depends(get_db)):
+    token_hash = hashlib.sha256(request.token.encode()).hexdigest()
+    token = db.email_verification_tokens.find_one({"token_hash": token_hash, "used_at": {"$exists": False}})
+    if not token or token.get("expires_at") < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="This verification link is invalid or expired.")
+    db.users.update_one({"id": token["user_id"]}, {"$set": {"email_verified": True, "updated_at": datetime.utcnow()}})
+    db.email_verification_tokens.update_one({"_id": token["_id"]}, {"$set": {"used_at": datetime.utcnow()}})
+    return {"message": "Email verified successfully. You can now log in."}
+
+
+@app.post("/auth/resend-verification")
+def resend_verification(request: ForgotPasswordRequest, http_request: Request, db = Depends(get_db)):
+    email = request.email.lower().strip()
+    _rate_limit(db, http_request, "verification", email)
+    user = db.users.find_one({"email": email})
+    if user and not user.get("email_verified", False) and user.get("email"):
+        raw_token = secrets.token_urlsafe(32)
+        db.email_verification_tokens.delete_many({"user_id": user["id"], "used_at": {"$exists": False}})
+        db.email_verification_tokens.insert_one({"id": get_next_id("email_verification_tokens"), "user_id": user["id"], "token_hash": hashlib.sha256(raw_token.encode()).hexdigest(), "expires_at": datetime.utcnow() + timedelta(hours=24), "created_at": datetime.utcnow()})
+        try:
+            send_verification_email(email, raw_token)
+        except Exception as exc:
+            logging.error("Verification resend failed type=%s message=%s", type(exc).__name__, str(exc)[:200])
+    return {"message": "If an account exists and needs verification, instructions have been sent."}
+
+
+@app.post("/auth/forgot-password")
+def forgot_password(request: ForgotPasswordRequest, http_request: Request, db = Depends(get_db)):
+    email = request.email.lower().strip()
+    _rate_limit(db, http_request, "reset", email)
+    user = db.users.find_one({"email": email})
+    if user:
+        raw_token = secrets.token_urlsafe(32)
+        db.password_reset_tokens.delete_many({"user_id": user["id"], "used_at": {"$exists": False}})
+        db.password_reset_tokens.insert_one({"id": get_next_id("password_reset_tokens"), "user_id": user["id"], "token_hash": hashlib.sha256(raw_token.encode()).hexdigest(), "expires_at": datetime.utcnow() + timedelta(minutes=30), "created_at": datetime.utcnow()})
+        try:
+            send_reset_email(email, raw_token)
+        except Exception as exc:
+            logging.error("Password reset email delivery failed type=%s message=%s", type(exc).__name__, str(exc)[:200])
+    return {"message": "If an account exists for this email, password reset instructions have been sent."}
+
+
+@app.post("/auth/reset-password")
+def reset_password(request: ResetPasswordRequest, db = Depends(get_db)):
+    if len(request.password) < 8:
+        raise HTTPException(status_code=422, detail="Password must be at least 8 characters long.")
+    token_hash = hashlib.sha256(request.token.encode()).hexdigest()
+    token = db.password_reset_tokens.find_one({"token_hash": token_hash, "used_at": {"$exists": False}})
+    if not token or token.get("expires_at") < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="This password reset link is invalid or expired.")
+    db.users.update_one({"id": token["user_id"]}, {"$set": {"hashed_password": hash_password(request.password), "updated_at": datetime.utcnow()}, "$inc": {"token_version": 1}})
+    db.password_reset_tokens.update_one({"_id": token["_id"]}, {"$set": {"used_at": datetime.utcnow()}})
+    return {"message": "Your password has been reset successfully."}
 
 
 @app.post("/auth/logout")

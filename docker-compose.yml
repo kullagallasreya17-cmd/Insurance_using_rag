@@ -98,6 +98,7 @@ services:
       WEB_SEARCH_TIMEOUT_SECONDS: ${WEB_SEARCH_TIMEOUT_SECONDS:-8}
       WEB_SEARCH_RETRIES: ${WEB_SEARCH_RETRIES:-1}
       WEB_SEARCH_DEPTH: ${WEB_SEARCH_DEPTH:-basic}
+      # SMTP_* and FRONTEND_URL are loaded from backend/.env via env_file.
       STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
       WEB_CONCURRENCY: 1
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://3.139.54.15:5173}

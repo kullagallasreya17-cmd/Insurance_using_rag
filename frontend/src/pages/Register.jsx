@@ -1,17 +1,15 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import api from "../api";
-import { setSession } from "../auth";
 import "./Login.css";
 
 function Register() {
-  const navigate = useNavigate();
   const [form, setForm] = useState({
     full_name: "",
     username: "",
+    email: "",
     password: "",
     confirm_password: "",
-    role: "customer",
   });
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
@@ -24,7 +22,7 @@ function Register() {
     event.preventDefault();
     setMessage("");
 
-    if (!form.full_name.trim() || !form.username.trim() || !form.password.trim() || !form.confirm_password.trim()) {
+    if (!form.full_name.trim() || !form.username.trim() || !form.email.trim() || !form.password.trim() || !form.confirm_password.trim()) {
       setMessage("Please complete all fields before submitting.");
       return;
     }
@@ -46,10 +44,9 @@ function Register() {
         full_name: form.full_name,
         username: form.username,
         password: form.password,
-        role: form.role,
+        email: form.email,
       });
-      setSession(response.data.access_token, response.data.user);
-      navigate("/dashboard");
+      setMessage(response.data.message || "Account created. Check your email to verify your account.");
     } catch (error) {
       setMessage(error.response?.data?.detail || "Registration failed. Please try again.");
     } finally {
@@ -86,6 +83,11 @@ function Register() {
         </label>
 
         <label>
+          Email
+          <input type="email" value={form.email} onChange={(event) => updateForm("email", event.target.value)} placeholder="Enter your email address" />
+        </label>
+
+        <label>
           Password
           <input
             type="password"
@@ -93,15 +95,6 @@ function Register() {
             onChange={(event) => updateForm("password", event.target.value)}
             placeholder="Create a password"
           />
-        </label>
-
-        <label>
-          Role
-          <select value={form.role} onChange={(event) => updateForm("role", event.target.value)}>
-            <option value="customer">Customer</option>
-            <option value="admin">Admin</option>
-            <option value="auditor">Auditor</option>
-          </select>
         </label>
 
         <label>

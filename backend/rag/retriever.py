@@ -89,6 +89,10 @@ DOCUMENT_REFERENCE_WORDS = {
     "summarize",
     "summary",
 }
+CLAIM_FILENAME_HINTS = re.compile(
+    r"\b(patient|medical|report|bill|invoice|prescription|lab|discharge|receipt|surgery_sample)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -240,11 +244,21 @@ def _matches_policy_variant(query: str, variant: str) -> bool:
     if variant in query:
         return True
 
-    query_tokens = _token_set(query)
+    query_tokens = set(_normalize_text(query).split())
     if len(variant_tokens) == 1:
         return variant_tokens[0] in query_tokens
 
     return set(variant_tokens).issubset(query_tokens)
+
+
+def _matches_named_document(query: str, value: str) -> tuple[bool, int]:
+    """Match a filename/document name, preserving identifiers such as A/B/C."""
+    stem = _normalize_text(Path(str(value or "")).stem)
+    tokens = [token for token in stem.split() if token not in {"policy", "pdf", "document"}]
+    query_tokens = set(_normalize_text(query).split())
+    if not tokens or not set(tokens).issubset(query_tokens):
+        return False, 0
+    return True, len(tokens)
 
 
 def _find_policy_sources(query: str) -> list[str]:
@@ -260,18 +274,36 @@ def _find_policy_sources(query: str) -> list[str]:
         "document_type": 1,
     }
     records = list(collection.find({}, projection))
-    matches: list[str] = []
+    named_matches: list[tuple[int, str]] = []
+    category_matches: list[str] = []
 
     for record in records:
         source = record.get("source")
-        if not source:
+        if not source or record.get("document_type") != "policy":
             continue
+
+        # Filename/document-name matches identify one document. Category
+        # matches such as "health policy" are intentionally only a fallback;
+        # otherwise a named Health_Policy_C query can match every health policy.
+        named_scores = []
+        for key in ("filename", "document_name", "title"):
+            matched, specificity = _matches_named_document(query_normalized, record.get(key))
+            if matched:
+                named_scores.append(specificity)
+        if named_scores:
+            specificity = max(named_scores)
+            named_matches.append((specificity, source))
+            continue
+
         for variant in _metadata_variants(record):
             if _matches_policy_variant(query_normalized, variant):
-                matches.append(source)
+                category_matches.append(source)
                 break
 
-    return sorted(set(matches))
+    if named_matches:
+        highest_specificity = max(score for score, _source in named_matches)
+        return sorted({source for score, source in named_matches if score == highest_specificity})
+    return sorted(set(category_matches))
 
 
 def _build_retrieval_plan(query: str, category: str | None = None) -> RetrievalPlan:
@@ -284,6 +316,9 @@ def _build_retrieval_plan(query: str, category: str | None = None) -> RetrievalP
 
     if inferred_category:
         query_filter["category"] = inferred_category
+
+    if _is_policy_query(query):
+        query_filter["document_type"] = "policy"
 
     # If a category is provided, prefer sources that belong to that category
     # to avoid returning documents from other policy types (e.g. life vs health).
@@ -322,7 +357,6 @@ def _build_retrieval_plan(query: str, category: str | None = None) -> RetrievalP
         return RetrievalPlan(query_filter=query_filter if query_filter else None, detected_category=inferred_category, allow_multiple_documents=True)
 
     if _is_policy_query(query):
-        query_filter["document_type"] = "policy"
         return RetrievalPlan(
             query_filter=query_filter,
             detected_category=inferred_category,
@@ -347,6 +381,16 @@ def _metadata_matches_plan(metadata: dict, plan: RetrievalPlan) -> bool:
     sources = plan.detected_sources or []
     if sources and metadata.get("source") not in sources:
         return False
+
+    if plan.query_filter and plan.query_filter.get("document_type") == "policy":
+        filename = metadata.get("filename") or metadata.get("document_name") or metadata.get("source") or ""
+        if CLAIM_FILENAME_HINTS.search(str(filename)):
+            logging.warning(
+                "Policy retrieval rejected evidence-like document filename=%s document_id=%s",
+                filename,
+                metadata.get("document_id"),
+            )
+            return False
 
     return True
 

@@ -119,6 +119,33 @@ def test_vehicle_policy_cover_uses_vehicle_category(monkeypatch):
     assert [doc.metadata["filename"] for doc in docs] == ["Vehicle_Policy.pdf"]
 
 
+def test_named_policy_query_does_not_match_every_policy_in_category(monkeypatch):
+    policy_a = make_doc("/docs/Health_Policy_A.pdf", "Health_Policy_A.pdf", "health_policy", "Hospitalization cover.", 0.9)
+    policy_c = make_doc("/docs/Health_Policy_C.pdf", "Health_Policy_C.pdf", "health_policy", "Knee replacement cover.", 0.8)
+    install_fake_rag(monkeypatch, [policy_a, policy_c])
+
+    docs = retriever.retrieve_documents("Summarize the Health_Policy_C document")
+
+    assert {doc.metadata["filename"] for doc in docs} == {"Health_Policy_C.pdf"}
+    assert {doc.metadata["document_type"] for doc in docs} == {"policy"}
+
+
+def test_policy_retrieval_rejects_evidence_like_stale_policy_metadata(monkeypatch):
+    stale_report = make_doc(
+        "/docs/jayadeva_knee_surgery_sample_patient_report.pdf",
+        "jayadeva_knee_surgery_sample_patient_report.pdf",
+        "health_policy",
+        "Patient diagnosis and surgery report.",
+        0.95,
+    )
+    policy = make_doc("/docs/Health_Policy.pdf", "Health_Policy.pdf", "health_policy", "Hospitalization coverage.", 0.8)
+    install_fake_rag(monkeypatch, [stale_report, policy])
+
+    docs = retriever.retrieve_documents("Does my health policy cover hospitalization?")
+
+    assert {doc.metadata["filename"] for doc in docs} == {"Health_Policy.pdf"}
+
+
 def test_reranker_promotes_more_query_specific_chunk(monkeypatch):
     broad_cover = make_doc(
         "/docs/Vehicle_Policy.pdf",
