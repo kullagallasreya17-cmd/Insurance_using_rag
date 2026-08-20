@@ -80,10 +80,6 @@ def get_current_user(
     user = db.users.find_one({"username": username})
     if user is None:
         raise credentials_exception
-    if not user.get("is_active", True) or not user.get("email_verified", False):
-        raise credentials_exception
-    if payload.get("token_version", 0) != user.get("token_version", 0):
-        raise credentials_exception
 
     mark_user_active(user, db)
     return user

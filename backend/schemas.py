@@ -37,20 +37,6 @@ class LoginRequest(BaseModel):
 
 class RegisterRequest(BaseModel):
     username: str
-    email: str
     password: str
     full_name: str
     role: str = "customer"
-
-
-class ForgotPasswordRequest(BaseModel):
-    email: str
-
-
-class TokenRequest(BaseModel):
-    token: str
-
-
-class ResetPasswordRequest(BaseModel):
-    token: str
-    password: str

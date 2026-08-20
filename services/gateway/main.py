@@ -136,26 +136,6 @@ async def register(payload: dict):
     return await proxy_json("POST", AUTH_URL, "/auth/register", json=payload)
 
 
-@app.post("/auth/forgot-password")
-async def forgot_password(payload: dict, request: Request):
-    return await proxy_json("POST", AUTH_URL, "/auth/forgot-password", json=payload, headers={"X-Forwarded-For": request.client.host if request.client else ""})
-
-
-@app.post("/auth/reset-password")
-async def reset_password(payload: dict):
-    return await proxy_json("POST", AUTH_URL, "/auth/reset-password", json=payload)
-
-
-@app.post("/auth/verify-email")
-async def verify_email(payload: dict):
-    return await proxy_json("POST", AUTH_URL, "/auth/verify-email", json=payload)
-
-
-@app.post("/auth/resend-verification")
-async def resend_verification(payload: dict, request: Request):
-    return await proxy_json("POST", AUTH_URL, "/auth/resend-verification", json=payload, headers={"X-Forwarded-For": request.client.host if request.client else ""})
-
-
 @app.get("/profile")
 async def profile(request: Request):
     headers = _get_auth_headers(request)
