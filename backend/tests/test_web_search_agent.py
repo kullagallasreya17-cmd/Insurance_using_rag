@@ -1,4 +1,4 @@
-from rag.query_router import QueryRoute, classify_query
+from rag.query_router import ClaimIntent, QueryRoute, classify_claim_intent, classify_query
 from rag import web_search as web_search_module
 from rag.web_search import format_web_context, web_search
 
@@ -13,6 +13,14 @@ def test_query_routes_web_only():
 
 def test_query_routes_policy_and_web():
     assert classify_query("Does my policy cover surgery and what is the current cost?") == QueryRoute.POLICY_AND_WEB
+
+
+def test_claim_workspace_separates_question_intents():
+    assert classify_claim_intent("Does my policy cover knee replacement?") == ClaimIntent.POLICY_QUERY
+    assert classify_claim_intent("Will this claim likely be covered by my policy?") == ClaimIntent.CLAIM_ANALYSIS_QUERY
+    assert classify_claim_intent("Does the medical report support the diagnosis?") == ClaimIntent.MEDICAL_DOCUMENT_QUERY
+    assert classify_claim_intent("How much does knee replacement cost in Bangalore?") == ClaimIntent.HOSPITAL_COST_QUERY
+    assert classify_claim_intent("My knee replacement cost 4 lakh. Is it covered and is the cost reasonable?") == ClaimIntent.MIXED_CLAIM_QUERY
 
 
 def test_missing_web_key_fails_gracefully(monkeypatch):

@@ -12,11 +12,13 @@ class WebSearchRequest(BaseModel):
 
 class ClaimRequest(BaseModel):
     question: str = ""
+    analysis_mode: str = "auto"
     treatment_details: str | None = None
     diagnosis: str | None = None
     hospital_name: str | None = None
     hospital_location: str | None = None
     admission_date: str | None = None
+    discharge_date: str | None = None
     claim_amount: float | None = None
     bill_amount: float | None = None
     policy_category: str | None = None

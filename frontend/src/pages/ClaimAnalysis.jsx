@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import api from "../api";
 import { getUser } from "../auth";
 import Navbar from "../components/Navbar";
@@ -8,13 +8,16 @@ import "./ClaimAnalysis.css";
 
 function ClaimAnalysis() {
   const user = getUser() || {};
-  const role = (user.role || "customer").toLowerCase();
-  const canAnalyzeClaims = ["admin", "customer"].includes(role);
+  const navigate = useNavigate();
+  const canAnalyzeClaims = ["admin", "customer"].includes((user.role || "customer").toLowerCase());
+  const [mode, setMode] = useState("claim");
   const [question, setQuestion] = useState("");
   const [diagnosis, setDiagnosis] = useState("");
   const [hospitalName, setHospitalName] = useState("");
   const [hospitalLocation, setHospitalLocation] = useState("");
   const [claimAmount, setClaimAmount] = useState("");
+  const [admissionDate, setAdmissionDate] = useState("");
+  const [dischargeDate, setDischargeDate] = useState("");
   const [policyCategory, setPolicyCategory] = useState("health_policy");
   const [documents, setDocuments] = useState([]);
   const [selectedPolicyId, setSelectedPolicyId] = useState("");
@@ -75,19 +78,22 @@ function ClaimAnalysis() {
       setValidationMessage("");
       setLoading(true);
       const response = await api.post("/claim/analyze", {
+        analysis_mode: mode,
         question,
-        treatment_details: question,
-        diagnosis: diagnosis || "not provided",
-        hospital_name: hospitalName || "not provided",
+        treatment_details: mode === "claim" ? question : null,
+        diagnosis: diagnosis || null,
+        hospital_name: hospitalName || null,
         hospital_location: hospitalLocation || null,
+        admission_date: admissionDate || null,
+        discharge_date: dischargeDate || null,
         claim_amount: claimAmount ? Number(claimAmount) : null,
-        policy_category: policyCategory,
-        policy_document_id: selectedPolicyId ? Number(selectedPolicyId) : null,
-        claim_document_ids: selectedClaimDocumentIds.map((id) => Number(id)),
-        enable_web_search: true,
+        policy_category: mode === "claim" ? policyCategory : null,
+        policy_document_id: mode === "claim" && selectedPolicyId ? Number(selectedPolicyId) : null,
+        claim_document_ids: mode === "claim" ? selectedClaimDocumentIds.map((id) => Number(id)) : [],
+        enable_web_search: mode !== "policy",
       });
       setResult(response.data);
-      await fetchClaims();
+      if (response.data.analysis_type === "claim_analysis") await fetchClaims();
     } catch (error) {
       setValidationMessage(error.response?.data?.detail || "Unable to analyze claim.");
     } finally {
@@ -118,20 +124,32 @@ function ClaimAnalysis() {
       <div className="claim-main">
         <Navbar />
         <div className="claim-content">
-          <h1>Claim Analysis & Claims</h1>
-          <p>Generate and review structured claim decisions using policy clauses, uploaded reports, and retrieved evidence.</p>
+          <div className="workspace-header">
+            <div><span className="section-kicker">Insurance AI Platform / Investigation</span><h1>Claim Investigation &amp; Analysis</h1><p>Keep policy truth, uploaded evidence, current web information, and AI assessment visibly separate.</p></div>
+            <button className="secondary-button" onClick={() => navigate("/documents")}>+ Upload document</button>
+          </div>
+
+          <div className="mode-switcher" aria-label="Question type">
+            <button className={mode === "claim" ? "mode-card active" : "mode-card"} onClick={() => { setMode("claim"); setResult(null); }}><strong>Actual Claim Analysis</strong><span>Policy + uploaded evidence + claim details</span></button>
+            <button className={mode === "policy" ? "mode-card active" : "mode-card"} onClick={() => { setMode("policy"); setResult(null); }}><strong>Policy Question</strong><span>Policy clauses and citations only</span></button>
+            <button className={mode === "web" ? "mode-card active" : "mode-card"} onClick={() => { setMode("web"); setResult(null); }}><strong>General / Web Question</strong><span>Current hospitals, treatments, and costs</span></button>
+          </div>
 
           {canAnalyzeClaims ? (
             <>
-              <div className="analysis-box">
+              <div className={`analysis-box ${mode}-mode`}>
                 <div className="field-group">
-                  <label className="field-label">Details / Question</label>
+                    <label className="field-label">{mode === "claim" ? "Claim question" : mode === "policy" ? "Policy question" : "Real-world question"}</label>
                   <input
                     type="text"
-                    placeholder="Enter a question or description to analyze."
+                      placeholder={mode === "claim" ? "Is my knee replacement claim covered and what amount may be payable?" : mode === "policy" ? "Does my policy cover knee replacement?" : "How much does knee replacement cost in Bangalore?"}
                     value={question}
                     onChange={(event) => setQuestion(event.target.value)}
                   />
+                </div>
+
+                <div className="question-chips">
+                  {(mode === "claim" ? ["Is this treatment covered?", "Analyze my hospital bill", "Estimate eligible claim amount", "Check missing documents"] : mode === "policy" ? ["Does my policy cover knee replacement?", "What are my exclusions?", "What is my waiting period?"] : ["How much does knee replacement cost in Bangalore?", "Compare treatment costs between hospitals", "Which hospitals provide this treatment?"]).map((item) => <button key={item} onClick={() => setQuestion(item)}>{item}</button>)}
                 </div>
 
                 <div className="field-group">
@@ -142,6 +160,16 @@ function ClaimAnalysis() {
                     value={diagnosis}
                     onChange={(event) => setDiagnosis(event.target.value)}
                   />
+                </div>
+
+                <div className="field-group">
+                  <label className="field-label">Admission date (optional)</label>
+                  <input type="date" value={admissionDate} onChange={(event) => setAdmissionDate(event.target.value)} />
+                </div>
+
+                <div className="field-group">
+                  <label className="field-label">Discharge date (optional)</label>
+                  <input type="date" value={dischargeDate} onChange={(event) => setDischargeDate(event.target.value)} />
                 </div>
 
                 <div className="field-group">
@@ -225,7 +253,7 @@ function ClaimAnalysis() {
               {validationMessage && <div className="validation-message">{validationMessage}</div>}
 
               <button className="analyze-button" onClick={analyzeClaim} disabled={loading}>
-                {loading ? "Analyzing claim..." : "Analyze Claim"}
+                {loading ? "Analysis in progress..." : mode === "claim" ? "Analyze Claim" : mode === "policy" ? "Ask Policy RAG" : "Search Current Information"}
               </button>
             </>
           ) : (
@@ -235,7 +263,16 @@ function ClaimAnalysis() {
             </div>
           )}
 
-          {result && (
+          {result && result.analysis_type !== "claim_analysis" && (
+            <div className="result-card routed-result-card">
+              <div className="result-header-row"><div><span className="section-kicker">Routed response</span><h2>{result.analysis_type === "policy_question" ? "Policy answer" : result.analysis_type === "document_question" ? "Document evidence answer" : "Real-world information"}</h2></div><span className="route-badge">{result.analysis_type === "policy_question" ? "Policy RAG" : result.analysis_type === "document_question" ? "Document RAG" : "Web search"}</span></div>
+              <p className="routed-answer">{result.answer}</p>
+              {(result.analysis_type === "policy_question" || result.analysis_type === "document_question") && <div className="section source-panel"><h3>{result.analysis_type === "policy_question" ? "Policy evidence" : "Uploaded document evidence"}</h3><ul>{(result.sources || []).map((source, index) => <li key={index}><strong>{source.filename || source.source || "Retrieved source"}</strong>{source.page && ` - page: ${source.page}`}<div className="source-excerpt">{source.excerpt || "Retrieved evidence."}</div></li>)}</ul></div>}
+              {result.analysis_type === "web_question" && <div className="section web-research-panel"><h3>Real-world information</h3>{result.web_search_error && <p>Web information could not be retrieved.</p>}<ul>{(result.web_sources || []).map((source) => <li key={source.url}><strong>{source.title || "External source"}</strong><p>{source.snippet || source.content || "No extracted information available."}</p><small>{source.source || "External source"} · {source.search_timestamp || "Timestamp unavailable"}</small><br /><a href={source.url} target="_blank" rel="noreferrer">View source</a></li>)}</ul>{!result.web_sources?.length && !result.web_search_error && <p>No web results were returned.</p>}<small>Web estimates are informational and do not represent insurance-approved reimbursement.</small></div>}
+            </div>
+          )}
+
+          {result && result.analysis_type === "claim_analysis" && (
             <div className="result-card">
               <div className="result-header-row">
                 <h2>Claim Decision</h2>
@@ -250,6 +287,8 @@ function ClaimAnalysis() {
                 <div className="result-stat"><span>Policy Type</span><strong>{policyLabel}</strong></div>
                 <div className="result-stat"><span>Evidence Docs</span><strong>{selectedClaimDocuments.length || "None selected"}</strong></div>
               </div>
+
+              {result.financials && <div className="section financial-panel"><h3>Financial Assessment</h3><ul><li><strong>Claimed amount:</strong> {result.financials.claim_amount ? `Rs. ${Number(result.financials.claim_amount).toLocaleString()}` : "Unable to determine from available evidence."}</li><li><strong>Eligible amount:</strong> {result.financials.eligible_amount ? `Rs. ${Number(result.financials.eligible_amount).toLocaleString()}` : "Unable to determine from available evidence."}</li><li><strong>Deductible:</strong> {result.financials.deductible ? `Rs. ${Number(result.financials.deductible).toLocaleString()}` : "Unable to determine from available evidence."}</li><li><strong>Co-pay:</strong> {result.financials.co_payment ? `Rs. ${Number(result.financials.co_payment).toLocaleString()}` : "Unable to determine from available evidence."}</li></ul></div>}
 
               <div className="section"><h3>Rationale</h3><p>{result.rationale}</p></div>
 
@@ -311,6 +350,8 @@ function ClaimAnalysis() {
                   )}
                 </div>
               )}
+
+              {!result.hospital_research && <div className="section web-not-used"><h3>Real-world information</h3><p>Web search was not required for this claim analysis. Coverage decisions remain grounded in policy and uploaded evidence.</p></div>}
 
               {result.escalation_required && (
                 <div className="section warning-panel">

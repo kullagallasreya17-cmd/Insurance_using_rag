@@ -28,6 +28,7 @@ from rag.mongo_indexer import MongoJobIndexer
 from rag.rq_indexer import RQJobIndexer
 from rag.indexer import extract_document_preview, index_document
 from rag.retriever import retrieve_documents
+from rag.query_router import ClaimIntent, classify_claim_intent
 from rag.web_search import web_search
 from rag.summarizer import generate_policy_summary
 from schemas import ChatRequest, ClaimRequest, LoginRequest, RegisterRequest, WebSearchRequest
@@ -51,6 +52,7 @@ UPLOAD_TYPES = {
     "upload-prescription": "prescription",
     "upload-lab-report": "lab_report",
 }
+CLAIM_EVIDENCE_TYPES = {"medical_report", "hospital_bill", "prescription", "lab_report"}
 KNOWLEDGE_CATEGORIES = [
     "health_policy",
     "vehicle_policy",
@@ -402,6 +404,8 @@ def resolve_claim_documents(db, request: ClaimRequest, current_user: dict) -> tu
             document = require_document_access(found_by_id[doc_id], current_user)
             if document.get("document_type") == "policy":
                 raise HTTPException(status_code=400, detail="Claim document IDs must refer to supporting claim evidence, not policies")
+            if document.get("document_type") not in CLAIM_EVIDENCE_TYPES:
+                raise HTTPException(status_code=400, detail="Unsupported claim evidence document type")
             claim_documents.append(document)
 
     inferred_types = list(request.uploaded_document_types or [])
@@ -691,6 +695,13 @@ def serialize_claim_analysis(claim: dict, include_sources: bool = False) -> dict
         "rag_evaluation": claim.get("rag_evaluation", {}),
         "policy_document_id": claim.get("policy_document_id"),
         "claim_document_ids": claim.get("claim_document_ids", []),
+        "analysis_type": claim.get("analysis_type", "claim_analysis"),
+        "intent": claim.get("intent", "CLAIM_ANALYSIS_QUERY"),
+        "hospital_name": claim.get("hospital_name"),
+        "claim_amount": claim.get("claim_amount"),
+        "admission_date": claim.get("admission_date"),
+        "discharge_date": claim.get("discharge_date"),
+        "web_search_used": claim.get("web_search_used", False),
         "created_by": claim.get("created_by"),
         "created_at": format_datetime(claim.get("created_at")),
     }
@@ -1458,6 +1469,54 @@ def claim_analyze(
     require_permission(current_user, "claims:analyze")
     started_at = time.perf_counter()
     try:
+        requested_mode = (request.analysis_mode or "auto").strip().lower()
+        if requested_mode not in {"auto", "policy", "web", "claim"}:
+            raise HTTPException(status_code=400, detail="analysis_mode must be auto, policy, web, or claim")
+
+        intent = classify_claim_intent(
+            request.question or request.treatment_details or request.diagnosis,
+            has_claim_documents=bool(request.claim_document_ids),
+        )
+        if requested_mode == "policy":
+            intent = ClaimIntent.POLICY_QUERY
+        elif requested_mode == "web":
+            intent = ClaimIntent.HOSPITAL_COST_QUERY
+        elif requested_mode == "claim":
+            intent = ClaimIntent.CLAIM_ANALYSIS_QUERY
+
+        question = request.question or request.treatment_details or request.diagnosis or "claim coverage assessment"
+        if intent in {ClaimIntent.POLICY_QUERY, ClaimIntent.MEDICAL_DOCUMENT_QUERY} and requested_mode != "claim":
+            result = agent.ask_with_metrics(question)
+            return {
+            "analysis_type": "policy_question" if intent == ClaimIntent.POLICY_QUERY else "document_question",
+                "intent": intent.value,
+                "question": question,
+                "answer": result.get("answer", ""),
+                "confidence": result.get("confidence", "medium"),
+                "sources": result.get("sources", []),
+                "route": result.get("route", "POLICY_ONLY"),
+                "web_search_used": False,
+                "web_search_ok": False,
+                "web_sources": [],
+            }
+
+        if intent in {ClaimIntent.WEB_QUERY, ClaimIntent.HOSPITAL_COST_QUERY} and requested_mode != "claim":
+            web_result = web_search(question)
+            return {
+                "analysis_type": "web_question",
+                "intent": intent.value,
+                "question": question,
+                "answer": "Current external information retrieved from the sources below." if web_result.get("results") else "Web information could not be retrieved.",
+                "confidence": "medium" if web_result.get("results") else "low",
+                "sources": [],
+                "web_search_used": True,
+                "web_search_ok": web_result.get("ok", False),
+                "web_search_error": web_result.get("error"),
+                "web_provider": web_result.get("provider"),
+                "web_sources": web_result.get("results", []),
+                "cost_comparison": web_result.get("results", []) if intent == ClaimIntent.HOSPITAL_COST_QUERY else [],
+            }
+
         policy_document, claim_documents, uploaded_document_types = resolve_claim_documents(
             db,
             request,
@@ -1465,7 +1524,7 @@ def claim_analyze(
         )
         structured_question = request.question or request.treatment_details or request.diagnosis or "claim coverage assessment"
         if request.treatment_details:
-            structured_question = f"{request.treatment_details}. Diagnosis: {request.diagnosis or 'not provided'}. Hospital: {request.hospital_name or 'not provided'}. Admission date: {request.admission_date or 'not provided'}."
+            structured_question = f"{request.treatment_details}. Diagnosis: {request.diagnosis or 'not provided'}. Hospital: {request.hospital_name or 'not provided'}. Admission date: {request.admission_date or 'not provided'}. Discharge date: {request.discharge_date or 'not provided'}."
 
         result = analyze_claim(
             question=structured_question,
@@ -1477,6 +1536,7 @@ def claim_analyze(
             hospital_name=request.hospital_name,
             hospital_location=request.hospital_location,
             enable_web_search=request.enable_web_search,
+            force_web_research=intent == ClaimIntent.MIXED_CLAIM_QUERY,
         )
 
         evidence_summary = "; ".join(result.get("covered_items", []) + result.get("exclusions", [])) or "No structured evidence extracted"
@@ -1496,6 +1556,13 @@ def claim_analyze(
             "claim_document_ids": [document.get("id") for document in claim_documents],
             "created_by": current_user["username"],
             "created_at": datetime.utcnow(),
+            "analysis_type": "claim_analysis",
+            "intent": intent.value,
+            "hospital_name": request.hospital_name,
+            "claim_amount": request.claim_amount or request.bill_amount,
+            "admission_date": request.admission_date,
+            "discharge_date": request.discharge_date,
+            "web_search_used": bool(result.get("hospital_research", {}).get("sources")),
         }
         db.claim_analyses.insert_one(record)
         record_metric_event(

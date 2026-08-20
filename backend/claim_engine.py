@@ -368,6 +368,7 @@ def analyze_claim(
     hospital_name: str | None = None,
     hospital_location: str | None = None,
     enable_web_search: bool = True,
+    force_web_research: bool = False,
 ):
     documents, retrieval_results = _retrieve_claim_context(
         question,
@@ -385,7 +386,7 @@ def analyze_claim(
         admission_date = m.group(1)
 
     web_research = {"enabled": False, "sources": [], "summary": ""}
-    if enable_web_search and hospital_name and not claim_document_ids:
+    if enable_web_search and hospital_name and (force_web_research or not claim_document_ids):
         web_research = search_hospital_cost(
             question,
             hospital_name,
