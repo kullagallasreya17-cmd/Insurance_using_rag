@@ -100,7 +100,7 @@ services:
       WEB_SEARCH_DEPTH: ${WEB_SEARCH_DEPTH:-basic}
       STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
       WEB_CONCURRENCY: 1
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://18.218.23.226:5173}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://3.139.54.15:5173}
     volumes:
       - backend_documents:/app/documents
     healthcheck:
