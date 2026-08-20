@@ -21,15 +21,16 @@ from fastapi.responses import JSONResponse, FileResponse, RedirectResponse
 
 from auth import clear_active_user, create_access_token, get_current_user
 from agents.insurance_agent import InsuranceAgent
-from claim_engine import analyze_claim
+from claim_engine import _retrieve_claim_context, analyze_claim, build_document_citations
 from database import get_database, get_db, init_db, get_next_id, hash_password, verify_password
 from rag.background_indexer import BackgroundIndexer
 from rag.mongo_indexer import MongoJobIndexer
 from rag.rq_indexer import RQJobIndexer
 from rag.indexer import extract_document_preview, index_document
 from rag.retriever import retrieve_documents
-from rag.query_router import ClaimIntent, classify_claim_intent
+from rag.query_router import ClaimIntent, resolve_claim_intent
 from rag.web_search import web_search
+from rag.generator import generate_answer
 from rag.summarizer import generate_policy_summary
 from schemas import ChatRequest, ClaimRequest, LoginRequest, RegisterRequest, WebSearchRequest
 from storage import get_storage
@@ -1469,26 +1470,45 @@ def claim_analyze(
     require_permission(current_user, "claims:analyze")
     started_at = time.perf_counter()
     try:
-        requested_mode = (request.analysis_mode or "auto").strip().lower()
+        requested_mode = ((request.mode if request.mode != "auto" else request.analysis_mode) or request.mode or "auto").strip().lower()
         if requested_mode not in {"auto", "policy", "web", "claim"}:
-            raise HTTPException(status_code=400, detail="analysis_mode must be auto, policy, web, or claim")
+            raise HTTPException(status_code=400, detail="mode must be auto, policy, web, or claim")
 
-        intent = classify_claim_intent(
+        # Manual page modes are authoritative. Only AUTO requests classify intent.
+        intent = resolve_claim_intent(
+            requested_mode,
             request.question or request.treatment_details or request.diagnosis,
             has_claim_documents=bool(request.claim_document_ids),
         )
-        if requested_mode == "policy":
-            intent = ClaimIntent.POLICY_QUERY
-        elif requested_mode == "web":
-            intent = ClaimIntent.HOSPITAL_COST_QUERY
-        elif requested_mode == "claim":
-            intent = ClaimIntent.CLAIM_ANALYSIS_QUERY
 
         question = request.question or request.treatment_details or request.diagnosis or "claim coverage assessment"
         if intent in {ClaimIntent.POLICY_QUERY, ClaimIntent.MEDICAL_DOCUMENT_QUERY} and requested_mode != "claim":
-            result = agent.ask_with_metrics(question)
+            policy_document = None
+            policy_documents = []
+            if request.policy_document_id is not None:
+                policy_document = require_document_access(
+                    db.documents.find_one({"id": request.policy_document_id}),
+                    current_user,
+                    expected_type="policy",
+                )
+                policy_documents, _policy_results = _retrieve_claim_context(
+                    question,
+                    policy_category=request.policy_category or policy_document.get("category"),
+                    policy_document_id=policy_document.get("id"),
+                )
+            if policy_documents:
+                result = {
+                    "answer": generate_answer(question, policy_documents, route="POLICY_ONLY"),
+                    "confidence": "medium",
+                    "sources": build_document_citations(policy_documents),
+                    "route": "POLICY_ONLY",
+                }
+            else:
+                result = agent.ask_with_metrics(question)
             return {
-            "analysis_type": "policy_question" if intent == ClaimIntent.POLICY_QUERY else "document_question",
+                "mode": requested_mode,
+                "response_type": "policy_answer" if intent == ClaimIntent.POLICY_QUERY else "document_answer",
+                "analysis_type": "policy_question" if intent == ClaimIntent.POLICY_QUERY else "document_question",
                 "intent": intent.value,
                 "question": question,
                 "answer": result.get("answer", ""),
@@ -1503,6 +1523,8 @@ def claim_analyze(
         if intent in {ClaimIntent.WEB_QUERY, ClaimIntent.HOSPITAL_COST_QUERY} and requested_mode != "claim":
             web_result = web_search(question)
             return {
+                "mode": requested_mode,
+                "response_type": "web_answer",
                 "analysis_type": "web_question",
                 "intent": intent.value,
                 "question": question,
@@ -1535,9 +1557,12 @@ def claim_analyze(
             uploaded_document_types=uploaded_document_types,
             hospital_name=request.hospital_name,
             hospital_location=request.hospital_location,
-            enable_web_search=request.enable_web_search,
+            enable_web_search=request.enable_web_search and requested_mode != "claim",
             force_web_research=intent == ClaimIntent.MIXED_CLAIM_QUERY,
         )
+        result["mode"] = requested_mode
+        result["response_type"] = "claim_analysis"
+        result["web_search_used"] = bool(result.get("hospital_research", {}).get("sources"))
 
         evidence_summary = "; ".join(result.get("covered_items", []) + result.get("exclusions", [])) or "No structured evidence extracted"
         record = {

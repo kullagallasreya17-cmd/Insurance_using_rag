@@ -64,6 +64,18 @@ def classify_claim_intent(query: str, has_claim_documents: bool = False) -> Clai
     return ClaimIntent.POLICY_QUERY
 
 
+def resolve_claim_intent(mode: str, query: str, has_claim_documents: bool = False) -> ClaimIntent:
+    """Honor explicit UI modes; classify only requests explicitly marked auto."""
+    normalized_mode = (mode or "auto").strip().lower()
+    if normalized_mode == "auto":
+        return classify_claim_intent(query, has_claim_documents=has_claim_documents)
+    return {
+        "policy": ClaimIntent.POLICY_QUERY,
+        "web": ClaimIntent.HOSPITAL_COST_QUERY,
+        "claim": ClaimIntent.CLAIM_ANALYSIS_QUERY,
+    }[normalized_mode]
+
+
 def classify_query(query: str) -> QueryRoute:
     text = (query or "").strip()
     policy_match = bool(POLICY_TERMS.search(text))

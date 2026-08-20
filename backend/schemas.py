@@ -12,7 +12,8 @@ class WebSearchRequest(BaseModel):
 
 class ClaimRequest(BaseModel):
     question: str = ""
-    analysis_mode: str = "auto"
+    mode: str = "auto"
+    analysis_mode: str | None = None
     treatment_details: str | None = None
     diagnosis: str | None = None
     hospital_name: str | None = None

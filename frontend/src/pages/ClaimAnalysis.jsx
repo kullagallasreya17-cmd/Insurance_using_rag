@@ -78,7 +78,7 @@ function ClaimAnalysis() {
       setValidationMessage("");
       setLoading(true);
       const response = await api.post("/claim/analyze", {
-        analysis_mode: mode,
+        mode,
         question,
         treatment_details: mode === "claim" ? question : null,
         diagnosis: diagnosis || null,
@@ -90,10 +90,10 @@ function ClaimAnalysis() {
         policy_category: mode === "claim" ? policyCategory : null,
         policy_document_id: mode === "claim" && selectedPolicyId ? Number(selectedPolicyId) : null,
         claim_document_ids: mode === "claim" ? selectedClaimDocumentIds.map((id) => Number(id)) : [],
-        enable_web_search: mode !== "policy",
+        enable_web_search: mode === "web",
       });
       setResult(response.data);
-      if (response.data.analysis_type === "claim_analysis") await fetchClaims();
+      if (response.data.response_type === "claim_analysis") await fetchClaims();
     } catch (error) {
       setValidationMessage(error.response?.data?.detail || "Unable to analyze claim.");
     } finally {
@@ -263,16 +263,16 @@ function ClaimAnalysis() {
             </div>
           )}
 
-          {result && result.analysis_type !== "claim_analysis" && (
+          {result && result.response_type !== "claim_analysis" && (
             <div className="result-card routed-result-card">
-              <div className="result-header-row"><div><span className="section-kicker">Routed response</span><h2>{result.analysis_type === "policy_question" ? "Policy answer" : result.analysis_type === "document_question" ? "Document evidence answer" : "Real-world information"}</h2></div><span className="route-badge">{result.analysis_type === "policy_question" ? "Policy RAG" : result.analysis_type === "document_question" ? "Document RAG" : "Web search"}</span></div>
+              <div className="result-header-row"><div><span className="section-kicker">Routed response</span><h2>{result.response_type === "policy_answer" ? "Policy answer" : result.response_type === "document_answer" ? "Document evidence answer" : "Real-world information"}</h2></div><span className="route-badge">{result.response_type === "policy_answer" ? "Policy RAG" : result.response_type === "document_answer" ? "Document RAG" : "Web search"}</span></div>
               <p className="routed-answer">{result.answer}</p>
-              {(result.analysis_type === "policy_question" || result.analysis_type === "document_question") && <div className="section source-panel"><h3>{result.analysis_type === "policy_question" ? "Policy evidence" : "Uploaded document evidence"}</h3><ul>{(result.sources || []).map((source, index) => <li key={index}><strong>{source.filename || source.source || "Retrieved source"}</strong>{source.page && ` - page: ${source.page}`}<div className="source-excerpt">{source.excerpt || "Retrieved evidence."}</div></li>)}</ul></div>}
-              {result.analysis_type === "web_question" && <div className="section web-research-panel"><h3>Real-world information</h3>{result.web_search_error && <p>Web information could not be retrieved.</p>}<ul>{(result.web_sources || []).map((source) => <li key={source.url}><strong>{source.title || "External source"}</strong><p>{source.snippet || source.content || "No extracted information available."}</p><small>{source.source || "External source"} · {source.search_timestamp || "Timestamp unavailable"}</small><br /><a href={source.url} target="_blank" rel="noreferrer">View source</a></li>)}</ul>{!result.web_sources?.length && !result.web_search_error && <p>No web results were returned.</p>}<small>Web estimates are informational and do not represent insurance-approved reimbursement.</small></div>}
+              {(result.response_type === "policy_answer" || result.response_type === "document_answer") && <div className="section source-panel"><h3>{result.response_type === "policy_answer" ? "Policy evidence" : "Uploaded document evidence"}</h3><ul>{(result.sources || []).map((source, index) => <li key={index}><strong>{source.filename || source.source || "Retrieved source"}</strong>{source.page && ` - page: ${source.page}`}<div className="source-excerpt">{source.excerpt || "Retrieved evidence."}</div></li>)}</ul></div>}
+              {result.response_type === "web_answer" && <div className="section web-research-panel"><h3>Real-world information</h3>{result.web_search_error && <p>Web information could not be retrieved.</p>}<ul>{(result.web_sources || []).map((source) => <li key={source.url}><strong>{source.title || "External source"}</strong><p>{source.snippet || source.content || "No extracted information available."}</p><small>{source.source || "External source"} · {source.search_timestamp || "Timestamp unavailable"}</small><br /><a href={source.url} target="_blank" rel="noreferrer">View source</a></li>)}</ul>{!result.web_sources?.length && !result.web_search_error && <p>No web results were returned.</p>}<small>Web estimates are informational and do not represent insurance-approved reimbursement.</small></div>}
             </div>
           )}
 
-          {result && result.analysis_type === "claim_analysis" && (
+          {result && result.response_type === "claim_analysis" && (
             <div className="result-card">
               <div className="result-header-row">
                 <h2>Claim Decision</h2>

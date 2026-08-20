@@ -1,4 +1,4 @@
-from rag.query_router import ClaimIntent, QueryRoute, classify_claim_intent, classify_query
+from rag.query_router import ClaimIntent, QueryRoute, classify_claim_intent, classify_query, resolve_claim_intent
 from rag import web_search as web_search_module
 from rag.web_search import format_web_context, web_search
 
@@ -21,6 +21,14 @@ def test_claim_workspace_separates_question_intents():
     assert classify_claim_intent("Does the medical report support the diagnosis?") == ClaimIntent.MEDICAL_DOCUMENT_QUERY
     assert classify_claim_intent("How much does knee replacement cost in Bangalore?") == ClaimIntent.HOSPITAL_COST_QUERY
     assert classify_claim_intent("My knee replacement cost 4 lakh. Is it covered and is the cost reasonable?") == ClaimIntent.MIXED_CLAIM_QUERY
+
+
+def test_manual_modes_are_authoritative_and_auto_is_classified():
+    question = "How much does knee replacement cost in Bangalore?"
+    assert resolve_claim_intent("claim", question) == ClaimIntent.CLAIM_ANALYSIS_QUERY
+    assert resolve_claim_intent("policy", question) == ClaimIntent.POLICY_QUERY
+    assert resolve_claim_intent("web", "Does my policy cover knee replacement?") == ClaimIntent.HOSPITAL_COST_QUERY
+    assert resolve_claim_intent("auto", question) == ClaimIntent.HOSPITAL_COST_QUERY
 
 
 def test_missing_web_key_fails_gracefully(monkeypatch):
