@@ -23,9 +23,11 @@ services:
     build: ./services/auth
     ports:
       - "8001:8000"
+    env_file:
+      - backend/.env
     environment:
-      SECRET_KEY: ec959152ee7a6f61eae00419fe747a57d9d071bb4117a4d139fe0120bc7b5e72
-      ACCESS_TOKEN_EXPIRE_MINUTES: 480
+      BACKEND_SERVICE_URL: http://backend:8000
+      REDIS_URL: redis://redis:6379/0
 
   documents:
     build: ./services/documents

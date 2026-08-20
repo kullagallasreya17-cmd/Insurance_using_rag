@@ -1,7 +1,7 @@
 import os
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 
 app = FastAPI(title="Auth Service")
 
@@ -29,6 +29,28 @@ def health():
 @app.post("/auth/register")
 async def register(payload: dict):
     return await proxy_json("POST", "/auth/register", json=payload)
+
+
+@app.post("/auth/verify-email")
+async def verify_email(payload: dict):
+    return await proxy_json("POST", "/auth/verify-email", json=payload)
+
+
+@app.post("/auth/resend-verification")
+async def resend_verification(payload: dict, request: Request):
+    headers = {"X-Forwarded-For": request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown")}
+    return await proxy_json("POST", "/auth/resend-verification", json=payload, headers=headers)
+
+
+@app.post("/auth/forgot-password")
+async def forgot_password(payload: dict, request: Request):
+    headers = {"X-Forwarded-For": request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown")}
+    return await proxy_json("POST", "/auth/forgot-password", json=payload, headers=headers)
+
+
+@app.post("/auth/reset-password")
+async def reset_password(payload: dict):
+    return await proxy_json("POST", "/auth/reset-password", json=payload)
 
 
 @app.post("/auth/login")

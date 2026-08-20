@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field
+import re
+
+from pydantic import BaseModel, Field, field_validator
 
 
 class ChatRequest(BaseModel):
@@ -39,4 +41,39 @@ class RegisterRequest(BaseModel):
     username: str
     password: str
     full_name: str
-    role: str = "customer"
+    email: str
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        value = value.strip().lower()
+        if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", value):
+            raise ValueError("Please enter a valid email address.")
+        return value
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        if len(value) < 8 or not re.search(r"[A-Za-z]", value) or not re.search(r"\d", value):
+            raise ValueError("Password must be at least 8 characters and include a letter and a number.")
+        return value
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class TokenRequest(BaseModel):
+    token: str = Field(min_length=32)
+
+
+class ResetPasswordRequest(TokenRequest):
+    password: str
+    confirm_password: str
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        if len(value) < 8 or not re.search(r"[A-Za-z]", value) or not re.search(r"\d", value):
+            raise ValueError("Password must be at least 8 characters and include a letter and a number.")
+        return value

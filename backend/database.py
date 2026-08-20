@@ -87,7 +87,15 @@ def get_next_id(collection_name: str) -> int:
 
 def init_db():
     database = get_database()
+    database.users.update_many({"is_active": {"$exists": False}}, {"$set": {"is_active": True}})
+    database.users.update_many({"email_verified": {"$exists": False}}, {"$set": {"email_verified": False}})
+    database.users.update_many({"token_version": {"$exists": False}}, {"$set": {"token_version": 0}})
     database.users.create_index("username", unique=True)
+    database.users.create_index("email", unique=True, sparse=True)
+    database.email_verification_tokens.create_index("token_hash", unique=True)
+    database.email_verification_tokens.create_index("expires_at", expireAfterSeconds=0)
+    database.password_reset_tokens.create_index("token_hash", unique=True)
+    database.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
     database.documents.create_index("id", unique=True)
     database.documents.create_index("filename")
     database.documents.create_index("category")
@@ -114,6 +122,12 @@ def init_db():
                 "full_name": "Admin User",
                 "role": "admin",
                 "hashed_password": hash_password("admin123"),
+                "password_hash": hash_password("admin123"),
+                "email": os.getenv("ADMIN_EMAIL", ""),
+                "is_active": True,
+                "email_verified": False,
+                "token_version": 0,
                 "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
             }
         )

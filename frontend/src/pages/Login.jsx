@@ -1,17 +1,18 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import api from "../api";
 import { setSession } from "../auth";
 import "./Login.css";
 
 function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [usernameOrEmail, setUsernameOrEmail] = useState("");
   const [password, setPassword] = useState("");
   const [selectedRole, setSelectedRole] = useState("customer");
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState(location.state?.message || "");
   const [loading, setLoading] = useState(false);
 
   const login = async (event) => {
@@ -39,11 +40,6 @@ function Login() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleForgotPassword = (event) => {
-    event.preventDefault();
-    setMessage("Please contact your administrator to reset your password.");
   };
 
   return (
@@ -101,9 +97,9 @@ function Login() {
             />
             Remember Me
           </label>
-          <button className="text-link" onClick={handleForgotPassword}>
+          <Link className="text-link" to="/forgot-password">
             Forgot Password?
-          </button>
+          </Link>
         </div>
 
         <button type="submit" disabled={loading} className="primary-button">

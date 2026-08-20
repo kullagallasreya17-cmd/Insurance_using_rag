@@ -23,9 +23,11 @@ services:
     build: ./services/auth
     ports:
       - "8001:8000"
+    env_file:
+      - backend/.env
     environment:
-      JWT_SECRET: insurance-rag-secret
-      JWT_EXPIRE_MINUTES: 480
+      BACKEND_SERVICE_URL: http://backend:8000
+      REDIS_URL: redis://redis:6379/0
 
   backend:
     build:

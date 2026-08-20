@@ -8,6 +8,10 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 import mimetypes
+import hashlib
+import hmac
+import secrets
+from datetime import timedelta, timezone
 
 if sys.platform == "win32":
     import io
@@ -15,7 +19,7 @@ if sys.platform == "win32":
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, RedirectResponse
 
@@ -32,7 +36,17 @@ from rag.query_router import ClaimIntent, resolve_claim_intent
 from rag.web_search import web_search
 from rag.generator import generate_answer
 from rag.summarizer import generate_policy_summary
-from schemas import ChatRequest, ClaimRequest, LoginRequest, RegisterRequest, WebSearchRequest
+from schemas import (
+    ChatRequest,
+    ClaimRequest,
+    ForgotPasswordRequest,
+    LoginRequest,
+    RegisterRequest,
+    ResetPasswordRequest,
+    TokenRequest,
+    WebSearchRequest,
+)
+from email_service import send_email
 from storage import get_storage
 
 
@@ -590,6 +604,65 @@ def health():
     }
 
 
+AUTH_TOKEN_TTL_MINUTES = int(os.getenv("AUTH_TOKEN_TTL_MINUTES", "30"))
+RESET_TOKEN_TTL_MINUTES = int(os.getenv("RESET_TOKEN_TTL_MINUTES", "30"))
+RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("AUTH_RATE_LIMIT_WINDOW_SECONDS", "900"))
+RATE_LIMIT_MAX_REQUESTS = int(os.getenv("AUTH_RATE_LIMIT_MAX_REQUESTS", "3"))
+
+
+def token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def enforce_auth_rate_limit(request_key: str):
+    try:
+        from redis import Redis
+
+        redis_client = Redis.from_url(REDIS_URL, decode_responses=True)
+        key = f"auth-rate:{request_key}"
+        count = redis_client.incr(key)
+        if count == 1:
+            redis_client.expire(key, RATE_LIMIT_WINDOW_SECONDS)
+        if count > RATE_LIMIT_MAX_REQUESTS:
+            raise HTTPException(status_code=429, detail="Too many requests. Please try again later.")
+    except HTTPException:
+        raise
+    except Exception:
+        logging.warning("Auth rate limiting unavailable")
+
+
+def request_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    return (forwarded.split(",")[0].strip() if forwarded else request.client.host if request.client else "unknown")
+
+
+def issue_email_token(collection, user_id: int, ttl_minutes: int) -> str:
+    raw_token = secrets.token_urlsafe(48)
+    now = datetime.utcnow()
+    collection.insert_one({
+        "id": get_next_id(collection.name),
+        "user_id": user_id,
+        "token_hash": token_hash(raw_token),
+        "expires_at": now + timedelta(minutes=ttl_minutes),
+        "used_at": None,
+        "created_at": now,
+    })
+    return raw_token
+
+
+def consume_token(collection, raw_token: str):
+    token_record = collection.find_one({"token_hash": token_hash(raw_token), "used_at": None})
+    if not token_record or token_record.get("expires_at") and token_record["expires_at"] < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="This link is invalid or has expired.")
+    updated = collection.find_one_and_update(
+        {"_id": token_record["_id"], "used_at": None},
+        {"$set": {"used_at": datetime.utcnow()}},
+    )
+    if not updated:
+        raise HTTPException(status_code=400, detail="This link is invalid or has expired.")
+    return token_record
+
+
 @app.post("/auth/login")
 def login(request: LoginRequest, db = Depends(get_db)):
     requested_role = normalize_role(request.role)
@@ -603,7 +676,12 @@ def login(request: LoginRequest, db = Depends(get_db)):
     if not verify_password(request.password, user.get("hashed_password", "")):
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
-    token = create_access_token({"sub": user["username"], "role": normalize_role(user.get("role"))})
+    if not user.get("is_active", True):
+        raise HTTPException(status_code=403, detail="This account is inactive.")
+    if not user.get("email_verified", False):
+        raise HTTPException(status_code=403, detail="Please verify your email address before logging in.")
+
+    token = create_access_token({"sub": user["username"], "role": normalize_role(user.get("role")), "token_version": user.get("token_version", 0)})
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -617,32 +695,94 @@ def login(request: LoginRequest, db = Depends(get_db)):
 
 @app.post("/auth/register")
 def register(request: RegisterRequest, db = Depends(get_db)):
-    existing_user = db.users.find_one({"username": request.username})
+    existing_user = db.users.find_one({"$or": [{"username": request.username}, {"email": request.email}]})
     if existing_user:
-        raise HTTPException(status_code=409, detail="Username already exists")
+        raise HTTPException(status_code=409, detail="An account with these details already exists.")
 
     user_id = get_next_id("users")
     user = {
         "id": user_id,
         "username": request.username,
         "full_name": request.full_name,
-        "role": normalize_role(request.role),
+        "role": "customer",
         "hashed_password": hash_password(request.password),
+        "password_hash": hash_password(request.password),
+        "email": request.email,
+        "is_active": True,
+        "email_verified": False,
+        "token_version": 0,
         "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
     }
     db.users.insert_one(user)
-
-    normalized_role = normalize_role(user["role"])
-    token = create_access_token({"sub": user["username"], "role": normalized_role})
+    raw_token = issue_email_token(db.email_verification_tokens, user_id, AUTH_TOKEN_TTL_MINUTES)
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+    try:
+        send_email(
+            user["email"],
+            "Verify your Insurance AI Platform email",
+            f"Hello,\n\nVerify your email: {frontend_url}/verify-email?token={raw_token}\n\nThis link expires shortly.",
+        )
+    except Exception as exc:
+        logging.error("Verification email could not be sent: %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Account created, but verification email delivery is unavailable.") from exc
     return {
-        "access_token": token,
-        "token_type": "bearer",
-        "user": {
-            "username": user["username"],
-            "full_name": user["full_name"],
-            "role": normalized_role,
-        },
+        "message": "Account created. Please verify your email address before logging in.",
     }
+
+
+@app.post("/auth/verify-email")
+def verify_email(request: TokenRequest, db = Depends(get_db)):
+    token_record = consume_token(db.email_verification_tokens, request.token)
+    user = db.users.find_one({"id": token_record["user_id"]})
+    if not user:
+        raise HTTPException(status_code=400, detail="This link is invalid or has expired.")
+    db.users.update_one({"id": user["id"]}, {"$set": {"email_verified": True, "updated_at": datetime.utcnow()}})
+    return {"message": "Your email has been verified successfully."}
+
+
+@app.post("/auth/resend-verification")
+def resend_verification(request: ForgotPasswordRequest, http_request: Request, db = Depends(get_db)):
+    enforce_auth_rate_limit(f"email:{request.email.strip().lower()}")
+    enforce_auth_rate_limit(f"ip:{request_ip(http_request)}")
+    user = db.users.find_one({"email": request.email.strip().lower()})
+    if user and not user.get("email_verified", False):
+        raw_token = issue_email_token(db.email_verification_tokens, user["id"], AUTH_TOKEN_TTL_MINUTES)
+        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+        try:
+            send_email(user["email"], "Verify your Insurance AI Platform email", f"Verify your email: {frontend_url}/verify-email?token={raw_token}")
+        except Exception:
+            logging.exception("Verification email resend failed")
+    return {"message": "If an account requires verification, instructions have been sent."}
+
+
+@app.post("/auth/forgot-password")
+def forgot_password(request: ForgotPasswordRequest, http_request: Request, db = Depends(get_db)):
+    enforce_auth_rate_limit(f"email:{request.email.strip().lower()}")
+    enforce_auth_rate_limit(f"ip:{request_ip(http_request)}")
+    user = db.users.find_one({"email": request.email.strip().lower()})
+    if user and user.get("is_active", True):
+        raw_token = issue_email_token(db.password_reset_tokens, user["id"], RESET_TOKEN_TTL_MINUTES)
+        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+        try:
+            send_email(user["email"], "Reset your Insurance AI Platform password", f"Hello,\n\nWe received a request to reset your password.\n\nReset your password: {frontend_url}/reset-password?token={raw_token}\n\nThis link expires shortly and can only be used once.\n\nIf you did not request this, you can safely ignore this email.")
+        except Exception:
+            logging.exception("Password reset email failed")
+    return {"message": "If an account exists for this email, password reset instructions have been sent."}
+
+
+@app.post("/auth/reset-password")
+def reset_password(request: ResetPasswordRequest, db = Depends(get_db)):
+    if not hmac.compare_digest(request.password, request.confirm_password):
+        raise HTTPException(status_code=422, detail="Passwords do not match.")
+    token_record = consume_token(db.password_reset_tokens, request.token)
+    user = db.users.find_one({"id": token_record["user_id"]})
+    if not user:
+        raise HTTPException(status_code=400, detail="This link is invalid or has expired.")
+    password_hash = hash_password(request.password)
+    db.users.update_one({"id": user["id"]}, {"$set": {"hashed_password": password_hash, "password_hash": password_hash, "updated_at": datetime.utcnow()}, "$inc": {"token_version": 1}})
+    db.active_users.delete_many({"username": user["username"]})
+    return {"message": "Your password has been reset successfully."}
 
 
 @app.post("/auth/logout")

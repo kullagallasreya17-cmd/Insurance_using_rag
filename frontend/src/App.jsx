@@ -8,12 +8,15 @@ import ClaimAnalysis from "./pages/ClaimAnalysis";
 import ClaimDetails from "./pages/ClaimDetails";
 import Dashboard from "./pages/Dashboard";
 import Documents from "./pages/Documents";
+import ForgotPassword from "./pages/ForgotPassword";
 import Landing from "./pages/Landing";
 import Login from "./pages/Login";
 import Notifications from "./pages/Notifications";
 import Policies from "./pages/Policies";
 import Profile from "./pages/Profile";
 import Register from "./pages/Register";
+import ResetPassword from "./pages/ResetPassword";
+import VerifyEmail from "./pages/VerifyEmail";
 import Settings from "./pages/Settings";
 import UploadPolicy from "./pages/UploadPolicy";
 
@@ -26,6 +29,9 @@ function App() {
         <Route path="/" element={<Landing />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
+        <Route path="/verify-email" element={<VerifyEmail />} />
         <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
         <Route path="/upload-policy" element={<ProtectedRoute requiredRoles={["admin", "customer"]}><UploadPolicy /></ProtectedRoute>} />
         <Route path="/documents" element={<ProtectedRoute><Documents /></ProtectedRoute>} />

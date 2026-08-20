@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import api from "../api";
-import { setSession } from "../auth";
 import "./Login.css";
 
 function Register() {
@@ -11,7 +10,7 @@ function Register() {
     username: "",
     password: "",
     confirm_password: "",
-    role: "customer",
+    email: "",
   });
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
@@ -24,7 +23,7 @@ function Register() {
     event.preventDefault();
     setMessage("");
 
-    if (!form.full_name.trim() || !form.username.trim() || !form.password.trim() || !form.confirm_password.trim()) {
+    if (!form.full_name.trim() || !form.username.trim() || !form.email.trim() || !form.password.trim() || !form.confirm_password.trim()) {
       setMessage("Please complete all fields before submitting.");
       return;
     }
@@ -34,8 +33,8 @@ function Register() {
       return;
     }
 
-    if (form.password.length < 8) {
-      setMessage("Password must be at least 8 characters long.");
+    if (form.password.length < 8 || !/[A-Za-z]/.test(form.password) || !/\d/.test(form.password)) {
+      setMessage("Password must be at least 8 characters and include a letter and a number.");
       return;
     }
 
@@ -45,11 +44,10 @@ function Register() {
       const response = await api.post("/auth/register", {
         full_name: form.full_name,
         username: form.username,
+        email: form.email,
         password: form.password,
-        role: form.role,
       });
-      setSession(response.data.access_token, response.data.user);
-      navigate("/dashboard");
+      navigate("/login", { state: { message: response.data.message } });
     } catch (error) {
       setMessage(error.response?.data?.detail || "Registration failed. Please try again.");
     } finally {
@@ -76,12 +74,22 @@ function Register() {
         </label>
 
         <label>
-          Username or Email
+          Username
           <input
             type="text"
             value={form.username}
             onChange={(event) => updateForm("username", event.target.value)}
             placeholder="Enter your username or email"
+          />
+        </label>
+
+        <label>
+          Email
+          <input
+            type="email"
+            value={form.email}
+            onChange={(event) => updateForm("email", event.target.value)}
+            placeholder="you@example.com"
           />
         </label>
 
@@ -93,15 +101,6 @@ function Register() {
             onChange={(event) => updateForm("password", event.target.value)}
             placeholder="Create a password"
           />
-        </label>
-
-        <label>
-          Role
-          <select value={form.role} onChange={(event) => updateForm("role", event.target.value)}>
-            <option value="customer">Customer</option>
-            <option value="admin">Admin</option>
-            <option value="auditor">Auditor</option>
-          </select>
         </label>
 
         <label>
