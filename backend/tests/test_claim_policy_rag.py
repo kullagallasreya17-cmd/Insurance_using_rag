@@ -79,3 +79,22 @@ def test_rag_evaluation_blocks_approval_without_policy_evidence():
 
     assert evaluation["grounded"] is False
     assert "No policy document evidence was retrieved for this claim." in evaluation["warnings"]
+
+
+def test_policy_retrieval_never_includes_claim_documents(monkeypatch):
+    filters = []
+
+    def fake_retrieve(query, override_filter=None, override_plan=None, **_kwargs):
+        filters.append(override_filter)
+        return [make_doc(10, "policy", "health_policy", "Knee replacement is covered when medically necessary.")]
+
+    monkeypatch.setattr(claim_engine, "retrieve_documents_with_scores_expanded", fake_retrieve)
+    documents, _results = claim_engine._retrieve_claim_context(
+        "Does my policy cover knee replacement?",
+        policy_category="health_policy",
+        policy_document_id=10,
+        claim_document_ids=[],
+    )
+
+    assert filters == [{"document_type": "policy", "document_id": 10, "category": "health_policy"}]
+    assert all(doc.metadata.get("document_type") == "policy" for doc in documents)

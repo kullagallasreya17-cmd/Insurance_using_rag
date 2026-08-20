@@ -176,6 +176,24 @@ def index_document(
             )
 
             if existing_file:
+                # A duplicate upload can have a newer document record with the
+                # correct policy category while older vectors retain stale
+                # document metadata. Reconcile those vectors before skipping
+                # duplicate embedding work.
+                if document_id is not None:
+                    collection.update_many(
+                        {"sha256": sha256_digest},
+                        {
+                            "$set": {
+                                "document_id": document_id,
+                                "document_type": document_type,
+                                "category": category,
+                                "filename": filename or file_path.name,
+                                "document_name": Path(filename or file_path.name).stem,
+                                "source": str(file_path),
+                            }
+                        },
+                    )
                 word_count = _count_words_in_pages(
                     valid_pages
                 )

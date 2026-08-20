@@ -43,6 +43,10 @@ def web_search(query: str, max_results: int | None = None) -> dict:
     limit = min(max(int(max_results or os.getenv("WEB_SEARCH_MAX_RESULTS", "5")), 1), 10)
 
     if not api_key:
+        logger.error(
+            "[WEB SEARCH] query=%r provider=%s status=not_configured error_type=MissingAPIKey error_message=WEB_SEARCH_API_KEY is not set",
+            query[:500], provider,
+        )
         return {
             "ok": False,
             "provider": provider,
@@ -51,6 +55,10 @@ def web_search(query: str, max_results: int | None = None) -> dict:
             "latency_ms": round((time.perf_counter() - started) * 1000, 2),
         }
     if provider != "tavily":
+        logger.error(
+            "[WEB SEARCH] query=%r provider=%s status=unsupported error_type=UnsupportedProvider error_message=unsupported provider",
+            query[:500], provider,
+        )
         return {"ok": False, "provider": provider, "error": f"Unsupported web search provider: {provider}.", "results": []}
 
     payload = {
@@ -67,6 +75,10 @@ def web_search(query: str, max_results: int | None = None) -> dict:
         try:
             with httpx.Client(timeout=float(os.getenv("WEB_SEARCH_TIMEOUT_SECONDS", "8"))) as client:
                 response = client.post("https://api.tavily.com/search", json=payload)
+                logger.info(
+                    "[WEB SEARCH] query=%r provider=%s status=%s result_count=pending",
+                    query[:500], provider, response.status_code,
+                )
             if response.status_code == 429:
                 raise WebSearchError("Web search rate limit reached.")
             if response.status_code in {401, 403}:
@@ -74,6 +86,10 @@ def web_search(query: str, max_results: int | None = None) -> dict:
             response.raise_for_status()
             data = response.json()
             results = [_result(item, index) for index, item in enumerate(data.get("results", [])[:limit], start=1)]
+            logger.info(
+                "[WEB SEARCH] query=%r provider=%s status=success result_count=%s",
+                query[:500], provider, len(results),
+            )
             return {
                 "ok": True,
                 "provider": provider,
@@ -86,7 +102,10 @@ def web_search(query: str, max_results: int | None = None) -> dict:
             if attempt < retries:
                 time.sleep(0.2 * (attempt + 1))
                 continue
-            logger.warning("Web search failed provider=%s reason=%s", provider, type(exc).__name__)
+            logger.error(
+                "[WEB SEARCH] query=%r provider=%s status=failed error_type=%s error_message=%s",
+                query[:500], provider, type(exc).__name__, str(exc)[:300],
+            )
 
     return {
         "ok": False,

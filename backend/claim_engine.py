@@ -1,10 +1,23 @@
 import json
+import logging
 import re
 from datetime import datetime
 from typing import Optional
 
 from rag.generator import generate_claim_analysis
 from rag.retriever import RetrievalPlan, retrieve_documents_with_scores_expanded
+
+def _build_claim_policy_query(
+    question: str,
+    policy_category: str | None = None,
+) -> str:
+    """Expand claim questions with the policy clauses needed for assessment."""
+    category_text = (policy_category or "health insurance").replace("_", " ")
+    return (
+        f"{category_text} {question} coverage hospitalization medically necessary treatment "
+        "waiting period exclusions coverage limit sum insured deductible co payment "
+        "room rent sub limit eligibility claim documents definitions"
+    )
 from web_research import search_hospital_cost
 
 
@@ -281,6 +294,13 @@ def _retrieve_claim_context(
     policy_document_id: int | None = None,
     claim_document_ids: list[int] | None = None,
 ):
+    logging.info(
+        "[CLAIM RETRIEVAL] query=%r policy_id=%s policy_category=%s claim_document_ids=%s",
+        question,
+        policy_document_id,
+        policy_category,
+        claim_document_ids or [],
+    )
     if policy_document_id is None and not claim_document_ids:
         if policy_category:
             policy_filter = {"document_type": "policy", "category": policy_category}
@@ -305,12 +325,18 @@ def _retrieve_claim_context(
             policy_filter["category"] = policy_category
         policy_plan = RetrievalPlan(query_filter=policy_filter)
         policy_results = retrieve_documents_with_scores_expanded(
-            _build_policy_retrieval_query(question),
+            _build_claim_policy_query(question, policy_category),
             override_filter=policy_filter,
             override_plan=policy_plan,
         )
         for doc, _score in policy_results:
             doc.metadata["evidence_role"] = "policy"
+        logging.info(
+            "[CLAIM RETRIEVAL] policy_id=%s retrieved=%s scores=%s",
+            policy_document_id,
+            len(policy_results),
+            [round(float(score), 4) for _doc, score in policy_results],
+        )
         results.extend(policy_results)
 
     if claim_document_ids:
@@ -323,6 +349,12 @@ def _retrieve_claim_context(
         )
         for doc, _score in claim_results:
             doc.metadata["evidence_role"] = "claim"
+        logging.info(
+            "[CLAIM EVIDENCE] document_ids=%s retrieved=%s scores=%s",
+            claim_document_ids,
+            len(claim_results),
+            [round(float(score), 4) for _doc, score in claim_results],
+        )
         results.extend(claim_results)
 
     seen = set()
@@ -476,11 +508,17 @@ def analyze_claim(
     sub_limit = _parse_number(parsed.get("sub_limit")) or 0.0
     claim_amt = float(claim_amount) if claim_amount is not None else _parse_number(parsed.get("claim_amount")) or 0.0
 
-    # Compute eligible amount conservatively
-    eligible = claim_amt
-    if coverage_limit is not None:
-        eligible = min(eligible, coverage_limit)
-    eligible = max(0.0, eligible - deductible - co_payment - sub_limit)
+    # Do not treat the submitted amount as payable without policy rules.
+    has_financial_rules = any(
+        value is not None
+        for value in (coverage_limit, parsed.get("deductible"), parsed.get("co_payment"), parsed.get("sub_limit"))
+    )
+    eligible = None
+    if claim_amount is not None and has_financial_rules:
+        eligible = float(claim_amount)
+        if coverage_limit is not None:
+            eligible = min(eligible, coverage_limit)
+        eligible = max(0.0, eligible - deductible - co_payment - sub_limit)
 
     parsed["financials"] = {
         "claim_amount": claim_amt,
@@ -488,7 +526,7 @@ def analyze_claim(
         "deductible": deductible,
         "co_payment": co_payment,
         "sub_limit": sub_limit,
-        "eligible_amount": round(eligible, 2),
+        "eligible_amount": round(eligible, 2) if eligible is not None else None,
     }
 
     # Preserve the submitted hospital name even when the LLM omits it.

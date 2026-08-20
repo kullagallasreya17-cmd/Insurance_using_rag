@@ -1491,20 +1491,24 @@ def claim_analyze(
                     current_user,
                     expected_type="policy",
                 )
-                policy_documents, _policy_results = _retrieve_claim_context(
-                    question,
-                    policy_category=request.policy_category or policy_document.get("category"),
-                    policy_document_id=policy_document.get("id"),
-                )
-            if policy_documents:
-                result = {
-                    "answer": generate_answer(question, policy_documents, route="POLICY_ONLY"),
-                    "confidence": "medium",
-                    "sources": build_document_citations(policy_documents),
-                    "route": "POLICY_ONLY",
-                }
-            else:
-                result = agent.ask_with_metrics(question)
+            policy_documents, _policy_results = _retrieve_claim_context(
+                question,
+                policy_category=request.policy_category or (policy_document or {}).get("category") or "health_policy",
+                policy_document_id=(policy_document or {}).get("id"),
+            )
+            logging.info(
+                "[POLICY RAG] mode=%s selected_policy_id=%s selected_policy_filename=%s document_type_filter=policy retrieved_chunks=%s",
+                requested_mode,
+                (policy_document or {}).get("id"),
+                (policy_document or {}).get("filename"),
+                len(policy_documents),
+            )
+            result = {
+                "answer": generate_answer(question, policy_documents, route="POLICY_ONLY") if policy_documents else "I couldn't find sufficiently relevant information in the selected policy.",
+                "confidence": "medium" if policy_documents else "low",
+                "sources": build_document_citations(policy_documents),
+                "route": "POLICY_ONLY",
+            }
             return {
                 "mode": requested_mode,
                 "response_type": "policy_answer" if intent == ClaimIntent.POLICY_QUERY else "document_answer",
@@ -1563,6 +1567,18 @@ def claim_analyze(
         result["mode"] = requested_mode
         result["response_type"] = "claim_analysis"
         result["web_search_used"] = bool(result.get("hospital_research", {}).get("sources"))
+        logging.info(
+            "[CLAIM] selected_policy_id=%s selected_policy_filename=%s policy_category=%s",
+            (policy_document or {}).get("id"),
+            (policy_document or {}).get("filename"),
+            request.policy_category or (policy_document or {}).get("category"),
+        )
+        logging.info(
+            "[CLAIM ANALYSIS] policy_evidence_count=%s claim_evidence_count=%s decision=%s",
+            result.get("rag_evaluation", {}).get("policy_source_count", 0),
+            result.get("rag_evaluation", {}).get("claim_source_count", 0),
+            result.get("decision"),
+        )
 
         evidence_summary = "; ".join(result.get("covered_items", []) + result.get("exclusions", [])) or "No structured evidence extracted"
         record = {

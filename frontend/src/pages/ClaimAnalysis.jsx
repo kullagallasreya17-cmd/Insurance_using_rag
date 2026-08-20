@@ -89,8 +89,8 @@ function ClaimAnalysis() {
         admission_date: admissionDate || null,
         discharge_date: dischargeDate || null,
         claim_amount: claimAmount ? Number(claimAmount) : null,
-        policy_category: mode === "claim" ? policyCategory : null,
-        policy_document_id: mode === "claim" && selectedPolicyId ? Number(selectedPolicyId) : null,
+        policy_category: mode === "claim" || mode === "policy" ? policyCategory : null,
+        policy_document_id: selectedPolicyId ? Number(selectedPolicyId) : null,
         claim_document_ids: mode === "claim" ? selectedClaimDocumentIds.map((id) => Number(id)) : [],
         enable_web_search: mode === "web",
       });
