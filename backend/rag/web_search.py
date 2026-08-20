@@ -69,6 +69,8 @@ def web_search(query: str, max_results: int | None = None) -> dict:
                 response = client.post("https://api.tavily.com/search", json=payload)
             if response.status_code == 429:
                 raise WebSearchError("Web search rate limit reached.")
+            if response.status_code in {401, 403}:
+                raise WebSearchError("Web search credentials were rejected. Check WEB_SEARCH_API_KEY in the backend container.")
             response.raise_for_status()
             data = response.json()
             results = [_result(item, index) for index, item in enumerate(data.get("results", [])[:limit], start=1)]

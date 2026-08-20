@@ -4,6 +4,7 @@ import api from "../api";
 import { getUser } from "../auth";
 import Navbar from "../components/Navbar";
 import Sidebar from "../components/Sidebar";
+import ClaimResultView from "../components/ClaimResultView";
 import "./ClaimAnalysis.css";
 
 function ClaimAnalysis() {
@@ -26,6 +27,7 @@ function ClaimAnalysis() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [claims, setClaims] = useState([]);
+  const showLegacyResult = false;
 
   const fetchClaims = async () => {
     try {
@@ -263,16 +265,16 @@ function ClaimAnalysis() {
             </div>
           )}
 
-          {result && result.response_type !== "claim_analysis" && (
+          {showLegacyResult && result && result.response_type !== "claim_analysis" && (
             <div className="result-card routed-result-card">
               <div className="result-header-row"><div><span className="section-kicker">Routed response</span><h2>{result.response_type === "policy_answer" ? "Policy answer" : result.response_type === "document_answer" ? "Document evidence answer" : "Real-world information"}</h2></div><span className="route-badge">{result.response_type === "policy_answer" ? "Policy RAG" : result.response_type === "document_answer" ? "Document RAG" : "Web search"}</span></div>
-              <p className="routed-answer">{result.answer}</p>
+              {result.response_type !== "web_answer" && <p className="routed-answer">{result.answer}</p>}
               {(result.response_type === "policy_answer" || result.response_type === "document_answer") && <div className="section source-panel"><h3>{result.response_type === "policy_answer" ? "Policy evidence" : "Uploaded document evidence"}</h3><ul>{(result.sources || []).map((source, index) => <li key={index}><strong>{source.filename || source.source || "Retrieved source"}</strong>{source.page && ` - page: ${source.page}`}<div className="source-excerpt">{source.excerpt || "Retrieved evidence."}</div></li>)}</ul></div>}
-              {result.response_type === "web_answer" && <div className="section web-research-panel"><h3>Real-world information</h3>{result.web_search_error && <p>Web information could not be retrieved.</p>}<ul>{(result.web_sources || []).map((source) => <li key={source.url}><strong>{source.title || "External source"}</strong><p>{source.snippet || source.content || "No extracted information available."}</p><small>{source.source || "External source"} · {source.search_timestamp || "Timestamp unavailable"}</small><br /><a href={source.url} target="_blank" rel="noreferrer">View source</a></li>)}</ul>{!result.web_sources?.length && !result.web_search_error && <p>No web results were returned.</p>}<small>Web estimates are informational and do not represent insurance-approved reimbursement.</small></div>}
+              {result.response_type === "web_answer" && <div className="section web-research-panel"><h3>Real-world information</h3>{result.web_search_error ? <p>Web information could not be retrieved. {result.web_search_error}</p> : <><p>Current information retrieved from the internet.</p><ul>{(result.web_sources || []).map((source) => <li key={source.url}><strong>{source.title || "External source"}</strong><p>{source.snippet || source.content || "No extracted information available."}</p><small>{source.source || "External source"} · {source.search_timestamp || "Timestamp unavailable"}</small><br /><a href={source.url} target="_blank" rel="noreferrer">View source</a></li>)}</ul>{!result.web_sources?.length && <p>No web results were returned.</p>}<small>Web estimates are informational and do not represent insurance-approved reimbursement.</small></>}</div>}
             </div>
           )}
 
-          {result && result.response_type === "claim_analysis" && (
+          {showLegacyResult && result && result.response_type === "claim_analysis" && (
             <div className="result-card">
               <div className="result-header-row">
                 <h2>Claim Decision</h2>
@@ -385,6 +387,8 @@ function ClaimAnalysis() {
               )}
             </div>
           )}
+
+          {result && <div className="result-card friendly-result-card"><ClaimResultView result={result} diagnosis={diagnosis} hospitalName={hospitalName} claimAmount={claimAmount} policyLabel={policyDocuments.find((document) => String(document.id) === String(selectedPolicyId))?.filename || policyLabel} /></div>}
 
           <div className="result-card history-card">
             <h2>Claim History</h2>
