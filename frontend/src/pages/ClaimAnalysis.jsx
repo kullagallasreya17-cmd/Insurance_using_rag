@@ -128,7 +128,7 @@ function ClaimAnalysis() {
         <div className="claim-content">
           <div className="workspace-header">
             <div><span className="section-kicker">Insurance AI Platform / Investigation</span><h1>Claim Investigation &amp; Analysis</h1><p>Keep policy truth, uploaded evidence, current web information, and AI assessment visibly separate.</p></div>
-            <button className="secondary-button" onClick={() => navigate("/documents")}>+ Upload document</button>
+            <button className="secondary-button" onClick={() => navigate("/upload-policy")}>+ Upload document</button>
           </div>
 
           <div className="mode-switcher" aria-label="Question type">

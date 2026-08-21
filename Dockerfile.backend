@@ -19,7 +19,7 @@ COPY backend/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY backend/rq-worker-entrypoint.sh /usr/local/bin/rq-worker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/rq-worker-entrypoint.sh
 
-COPY backend .
+COPY backend/ .
 
 EXPOSE 8000
 

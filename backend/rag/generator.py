@@ -1,11 +1,17 @@
 import os
+import re
 
 LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "15"))
 LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "0"))
 RAG_SIMILARITY_THRESHOLD = float(os.getenv("RAG_SIMILARITY_THRESHOLD", "0.15"))
+GROUNDING_MAX_RETRIES = min(max(int(os.getenv("GROUNDING_MAX_RETRIES", "2")), 0), 2)
 INSUFFICIENT_CONTEXT_ANSWER = "I couldn't find sufficiently relevant information in the uploaded insurance documents."
 SELECTED_DOCUMENT_NOT_FOUND_ANSWER = "I couldn't find this information in the selected insurance document."
 MULTI_DOCUMENT_NOT_FOUND_ANSWER = "I couldn't find this information across the retrieved insurance documents."
+UNGROUNDED_ANSWER = (
+    "I couldn't verify that answer from the retrieved insurance evidence. "
+    "Please select the relevant policy document or provide more specific details."
+)
 
 
 def _is_quota_error(exc: Exception) -> bool:
@@ -89,6 +95,56 @@ def _validate_verified_context(documents) -> tuple[bool, str | None]:
         return False, SELECTED_DOCUMENT_NOT_FOUND_ANSWER
 
     return True, None
+
+
+def _has_grounding_overlap(answer: str, evidence: str) -> bool:
+    """Reject model output that has no meaningful lexical link to its evidence."""
+    answer_terms = {
+        term for term in re.findall(r"[a-zA-Z0-9]{4,}", (answer or "").lower())
+    }
+    evidence_terms = {
+        term for term in re.findall(r"[a-zA-Z0-9]{4,}", (evidence or "").lower())
+    }
+    common_terms = answer_terms & evidence_terms
+    return len(common_terms) >= 2
+
+
+def extract_answer_claims(answer: str) -> list[str]:
+    """Extract sentence-sized factual claims for lightweight grounding checks."""
+    claims = []
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", answer or ""):
+        normalized = " ".join(sentence.split()).strip(" -*")
+        terms = re.findall(r"[a-zA-Z0-9]{4,}", normalized.lower())
+        if len(terms) >= 4 and not normalized.lower().startswith(("source:", "sources:")):
+            claims.append(normalized)
+    return claims
+
+
+def validate_answer_grounding(answer: str, documents, external_context: str = "") -> dict:
+    """Return claim-level grounding and citation readiness for a generated answer."""
+    policy_evidence = "\n".join(
+        (getattr(doc, "page_content", "") or "") for doc in documents or []
+    )
+    evidence = "\n".join(part for part in (policy_evidence, external_context) if part)
+    claims = extract_answer_claims(answer)
+    unsupported_claims = [claim for claim in claims if not _has_grounding_overlap(claim, evidence)]
+    source_count = len({
+        (getattr(doc, "metadata", {}) or {}).get("source")
+        or (getattr(doc, "metadata", {}) or {}).get("filename")
+        for doc in documents or []
+    })
+    has_citations = bool(documents) or bool(external_context.strip())
+    claim_count = len(claims)
+    supported_count = claim_count - len(unsupported_claims)
+    score = round(supported_count / claim_count, 2) if claim_count else 0.0
+    return {
+        "grounding_score": score,
+        "claims": claims,
+        "unsupported_claims": unsupported_claims,
+        "citation_valid": has_citations,
+        "source_count": source_count,
+        "grounded": bool(answer) and has_citations and not unsupported_claims,
+    }
 
 
 def _fallback_answer(question, documents, reason=None, external_context=""):
@@ -222,6 +278,8 @@ Important rules:
 - If the answer is not explicitly supported by the verified context, say exactly:
   "{not_found_answer}"
 - Always prefer refusing to answer over providing unsupported information.
+- Every factual statement must be directly supported by the evidence. Do not add plausible background facts.
+- If you cannot support a statement, omit it or return the required refusal exactly.
 - {comparison_instruction}
 
 Verified retrieved context:
@@ -240,7 +298,24 @@ Answer:
 """
 
     try:
-        return _invoke_with_retries(llm, prompt)
+        answer = None
+        validation = None
+        for attempt in range(GROUNDING_MAX_RETRIES + 1):
+            retry_instruction = ""
+            if attempt:
+                retry_instruction = (
+                    "\nYour previous answer contained unsupported claims. Regenerate only claims that "
+                    "are explicitly supported by the evidence, or return the refusal text.\n"
+                )
+            answer = _invoke_with_retries(llm, prompt + retry_instruction)
+            validation = validate_answer_grounding(answer, documents, external_context)
+            if validation["grounded"]:
+                return answer
+            print(
+                "LLM answer failed grounding validation "
+                f"(attempt {attempt + 1}, score={validation['grounding_score']})"
+            )
+        return not_found_answer if documents else UNGROUNDED_ANSWER
     except Exception as exc:
         print(f"LLM generation unavailable: {type(exc).__name__}: {exc}")
         return _fallback_answer(

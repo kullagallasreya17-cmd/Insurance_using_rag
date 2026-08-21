@@ -4,7 +4,7 @@ import time
 from agents.retriever_agent import RetrievalAgent
 from claim_engine import build_document_citations, estimate_confidence_from_retrieval_scores
 from rag.cache import cache
-from rag.generator import generate_answer
+from rag.generator import generate_answer, validate_answer_grounding
 from rag.query_router import QueryRoute, classify_query
 from rag.web_search import format_web_context, web_search
 
@@ -87,6 +87,15 @@ class InsuranceAgent:
         generation_ms = round((time.perf_counter() - generation_started) * 1000, 2)
 
         citations = build_document_citations(documents)
+        grounding = validate_answer_grounding(
+            answer,
+            documents,
+            external_context=(
+                format_web_context(web_result.get("results", []))
+                if web_result.get("results")
+                else ""
+            ),
+        )
         confidence = "medium" if documents or web_result.get("results") else "low"
         if documents:
             try:
@@ -102,6 +111,10 @@ class InsuranceAgent:
             "generation_ms": generation_ms,
             "sources": citations,
             "citations": citations,
+            "grounding_score": grounding["grounding_score"],
+            "grounded": grounding["grounded"],
+            "unsupported_claims": grounding["unsupported_claims"],
+            "citation_valid": grounding["citation_valid"],
             "confidence": confidence,
             "route": route.value,
             "web_search_used": route in {QueryRoute.WEB_ONLY, QueryRoute.POLICY_AND_WEB},

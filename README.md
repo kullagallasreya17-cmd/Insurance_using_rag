@@ -85,3 +85,23 @@ cd backend
 ```
 
 The Docker setup runs API replicas with MongoDB-backed durable indexing jobs, MongoDB-backed cache/presence state, and MongoDB Atlas Vector Search.
+
+## Email Verification SMTP
+
+Registration creates the account before sending the verification email. Configure SMTP in `backend/.env`; Docker passes these variables to the backend through `env_file`.
+
+For Gmail or other providers using STARTTLS on port 587:
+
+```text
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_SECURITY=starttls
+SMTP_USERNAME=your-mailbox@example.com
+SMTP_PASSWORD=provider-app-password
+SMTP_FROM_EMAIL=your-mailbox@example.com
+SMTP_FROM_NAME=Insurance AI Platform
+```
+
+For providers using implicit TLS on port 465, set `SMTP_PORT=465` and `SMTP_SECURITY=ssl`. Use an app password or provider SMTP credential, not a normal mailbox password when the provider requires two-factor authentication. After changing SMTP settings, restart the backend container with `docker compose up -d --build backend auth`.
+
+The backend validates the SMTP configuration without logging credentials. If delivery fails, the account remains created and the API returns a clear delivery-unavailable message; the user can resend verification after SMTP is repaired.

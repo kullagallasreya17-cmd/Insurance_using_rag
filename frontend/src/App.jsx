@@ -43,7 +43,7 @@ function App() {
         <Route path="/analytics" element={<ProtectedRoute requiredRoles={["admin", "auditor"]}><Analytics /></ProtectedRoute>} />
         <Route path="/notifications" element={<ProtectedRoute><Notifications /></ProtectedRoute>} />
         <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
-        <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+        <Route path="/settings" element={<ProtectedRoute requiredRoles={["admin"]}><Settings /></ProtectedRoute>} />
         <Route path="/admin" element={<ProtectedRoute requiredRoles={["admin", "auditor"]}><AdminDashboard /></ProtectedRoute>} />
       </Routes>
     </BrowserRouter>

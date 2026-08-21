@@ -1,4 +1,5 @@
 import re
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -42,6 +43,7 @@ class RegisterRequest(BaseModel):
     password: str
     full_name: str
     email: str
+    role: Literal["customer"] = "customer"
 
     @field_validator("email")
     @classmethod

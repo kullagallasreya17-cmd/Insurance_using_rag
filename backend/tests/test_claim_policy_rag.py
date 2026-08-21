@@ -81,6 +81,48 @@ def test_rag_evaluation_blocks_approval_without_policy_evidence():
     assert "No policy document evidence was retrieved for this claim." in evaluation["warnings"]
 
 
+def test_rag_evaluation_verifies_claim_fields_against_policy_evidence():
+    policy_doc = make_doc(
+        31,
+        "policy",
+        "health_policy",
+        "Hospitalization is covered after a 12 month waiting period with a coverage limit of 500000.",
+    )[0]
+    policy_doc.metadata["evidence_role"] = "policy"
+    claim_doc = make_doc(32, "medical_report", "medical_document", "Diagnosis confirms hospitalization.")[0]
+    claim_doc.metadata["evidence_role"] = "claim"
+    parsed = {
+        "decision": "approved",
+        "rationale": "Hospitalization is covered.",
+        "covered_items": ["Hospitalization"],
+        "exclusions": [],
+        "waiting_period_months": 12,
+        "coverage_limit": 500000,
+    }
+
+    evaluation = claim_engine.evaluate_rag_grounding(parsed, [policy_doc, claim_doc], [0.8, 0.7])
+
+    assert evaluation["grounded"] is True
+    assert evaluation["grounding_score"] == 1.0
+    assert all(evaluation["verification_checks"].values())
+
+
+def test_rag_evaluation_rejects_unsupported_coverage_item():
+    policy_doc = make_doc(33, "policy", "health_policy", "Hospitalization is covered.")[0]
+    policy_doc.metadata["evidence_role"] = "policy"
+    parsed = {
+        "decision": "approved",
+        "rationale": "Dental implants are covered.",
+        "covered_items": ["Dental implants"],
+        "exclusions": [],
+    }
+
+    evaluation = claim_engine.evaluate_rag_grounding(parsed, [policy_doc], [0.8])
+
+    assert evaluation["grounded"] is False
+    assert evaluation["verification_checks"]["coverage"] is False
+
+
 def test_policy_retrieval_never_includes_claim_documents(monkeypatch):
     filters = []
 

@@ -11,6 +11,7 @@ function Register() {
     password: "",
     confirm_password: "",
     email: "",
+    role: "customer",
   });
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
@@ -46,6 +47,7 @@ function Register() {
         username: form.username,
         email: form.email,
         password: form.password,
+        role: form.role,
       });
       navigate("/login", { state: { message: response.data.message } });
     } catch (error) {
@@ -91,6 +93,17 @@ function Register() {
             onChange={(event) => updateForm("email", event.target.value)}
             placeholder="you@example.com"
           />
+        </label>
+
+        <label>
+          Account Role
+          <select
+            value={form.role}
+            onChange={(event) => updateForm("role", event.target.value)}
+          >
+            <option value="customer">Customer</option>
+          </select>
+          <small>Admin and auditor roles are assigned by an administrator.</small>
         </label>
 
         <label>

@@ -196,6 +196,87 @@ def test_vehicle_policy_missing_waiting_period_does_not_use_health_policy(monkey
     assert answer == generator.INSUFFICIENT_CONTEXT_ANSWER
 
 
+def test_generated_answer_without_evidence_overlap_is_rejected(monkeypatch):
+    document, _score = make_doc(
+        "/docs/Health_Policy.pdf",
+        "Health_Policy.pdf",
+        "health_policy",
+        "Hospitalization is covered after a waiting period.",
+        0.9,
+    )
+
+    class FakeResponse:
+        content = "The policy guarantees unlimited dental implants and overseas treatment."
+
+    class FakeLlm:
+        def invoke(self, _prompt):
+            return FakeResponse()
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    monkeypatch.setattr(generator, "_build_llm", lambda temperature: FakeLlm())
+
+    answer = generator.generate_answer("What is covered?", [document])
+
+    assert answer == generator.SELECTED_DOCUMENT_NOT_FOUND_ANSWER
+
+
+def test_generated_answer_with_evidence_overlap_is_returned(monkeypatch):
+    document, _score = make_doc(
+        "/docs/Health_Policy.pdf",
+        "Health_Policy.pdf",
+        "health_policy",
+        "Hospitalization is covered after a waiting period.",
+        0.9,
+    )
+
+    class FakeResponse:
+        content = "Hospitalization is covered after a waiting period."
+
+    class FakeLlm:
+        def invoke(self, _prompt):
+            return FakeResponse()
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    monkeypatch.setattr(generator, "_build_llm", lambda temperature: FakeLlm())
+
+    answer = generator.generate_answer("What is covered?", [document])
+
+    assert answer == FakeResponse.content
+
+
+def test_unsupported_answer_is_regenerated_once_until_grounded(monkeypatch):
+    document, _score = make_doc(
+        "/docs/Health_Policy.pdf",
+        "Health_Policy.pdf",
+        "health_policy",
+        "Hospitalization is covered after a waiting period.",
+        0.9,
+    )
+    responses = iter([
+        "Unlimited dental implants are covered.",
+        "Hospitalization is covered after a waiting period.",
+    ])
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, content):
+            self.content = content
+
+    class FakeLlm:
+        def invoke(self, prompt):
+            calls.append(prompt)
+            return FakeResponse(next(responses))
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    monkeypatch.setattr(generator, "_build_llm", lambda temperature: FakeLlm())
+
+    answer = generator.generate_answer("What is covered?", [document])
+
+    assert answer == "Hospitalization is covered after a waiting period."
+    assert len(calls) == 2
+    assert "unsupported claims" in calls[1]
+
+
 def test_health_policy_document_retrieves_only_health_chunks(monkeypatch):
     vehicle = make_doc("/docs/Vehicle_Policy.pdf", "Vehicle_Policy.pdf", "vehicle_policy", "Vehicle collision cover.", 0.9)
     health = make_doc("/docs/Health_Policy.pdf", "Health_Policy.pdf", "health_policy", "Health hospitalization cover.", 0.3)

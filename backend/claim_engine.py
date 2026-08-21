@@ -238,6 +238,61 @@ def evaluate_rag_grounding(parsed: dict, documents, retrieval_scores: list[float
             if item_text and item_text in answer_text and item_text not in context:
                 supported_terms.discard(item_text)
 
+    policy_context = " ".join(
+        (getattr(doc, "page_content", "") or "").lower()
+        for doc in documents or []
+        if (getattr(doc, "metadata", {}) or {}).get("evidence_role") == "policy"
+        or (getattr(doc, "metadata", {}) or {}).get("document_type") == "policy"
+    )
+    claim_context = " ".join(
+        (getattr(doc, "page_content", "") or "").lower()
+        for doc in documents or []
+        if (getattr(doc, "metadata", {}) or {}).get("evidence_role") == "claim"
+    )
+    verification_warnings = []
+    coverage_items = _ensure_list(parsed.get("covered_items"))
+    exclusion_items = _ensure_list(parsed.get("exclusions"))
+    unsupported_coverage = [
+        str(item) for item in coverage_items
+        if str(item).strip().lower() not in policy_context
+    ]
+    unsupported_exclusions = [
+        str(item) for item in exclusion_items
+        if str(item).strip().lower() not in policy_context
+    ]
+    if parsed.get("decision") == "approved" and not coverage_items:
+        verification_warnings.append("Coverage was not explicitly identified in policy evidence.")
+    if unsupported_coverage:
+        verification_warnings.append("One or more covered items were not found in policy evidence.")
+    if unsupported_exclusions:
+        verification_warnings.append("One or more exclusions were not found in policy evidence.")
+
+    waiting_value = parsed.get("waiting_period_months")
+    waiting_verified = waiting_value is None or str(waiting_value).lower() in policy_context
+    if not waiting_verified:
+        verification_warnings.append("Waiting-period value was not found in policy evidence.")
+
+    limit_value = parsed.get("coverage_limit")
+    limit_verified = limit_value is None or str(limit_value).replace(",", "").lower() in policy_context.replace(",", "")
+    if not limit_verified:
+        verification_warnings.append("Coverage-limit value was not found in policy evidence.")
+
+    has_claim_documents = any(
+        (getattr(doc, "metadata", {}) or {}).get("document_type") != "policy"
+        for doc in documents or []
+    )
+    claim_evidence_verified = not has_claim_documents or bool(claim_context.strip())
+    if has_claim_documents and not claim_evidence_verified:
+        verification_warnings.append("Claim documents were retrieved without usable claim evidence.")
+
+    citation_valid = all(
+        (getattr(doc, "metadata", {}) or {}).get("source")
+        or (getattr(doc, "metadata", {}) or {}).get("filename")
+        for doc in documents or []
+    )
+    if not citation_valid:
+        verification_warnings.append("Retrieved evidence is missing source citations.")
+
     for doc in documents or []:
         metadata = getattr(doc, "metadata", {}) or {}
         if metadata.get("evidence_role") == "policy" or metadata.get("document_type") == "policy":
@@ -254,6 +309,16 @@ def evaluate_rag_grounding(parsed: dict, documents, retrieval_scores: list[float
         warnings.append("Retrieved evidence was low confidence.")
     if (parsed.get("decision") == "approved" and not supported_terms and has_sources):
         warnings.append("Approval was not backed by explicit covered item or exclusion evidence.")
+    warnings.extend(verification_warnings)
+
+    verification_checks = {
+        "coverage": not unsupported_coverage and (parsed.get("decision") != "approved" or bool(coverage_items)),
+        "exclusions": not unsupported_exclusions,
+        "waiting_period": waiting_verified,
+        "coverage_limit": limit_verified,
+        "claim_evidence": claim_evidence_verified,
+        "citations": citation_valid,
+    }
 
     return {
         "confidence": confidence,
@@ -272,6 +337,10 @@ def evaluate_rag_grounding(parsed: dict, documents, retrieval_scores: list[float
         "has_claim_evidence": has_claim_source,
         "supported_terms": sorted(supported_terms),
         "warnings": warnings,
+        "verification_checks": verification_checks,
+        "grounding_score": round(
+            sum(verification_checks.values()) / len(verification_checks), 2
+        ),
         "grounded": has_sources and has_policy_source and confidence != "low" and not warnings,
     }
 
